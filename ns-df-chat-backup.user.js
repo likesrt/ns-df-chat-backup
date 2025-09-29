@@ -313,6 +313,22 @@
     }
 
     /**
+     * 更新指定成员的备注
+     * @param {number} memberId - 成员ID
+     * @param {string} remark - 备注内容
+     * @returns {Promise<Object>} 更新后的聊天消息数据
+     */
+    async updateRemark(memberId, remark) {
+      const message = await this.getTalkMessage(memberId);
+      if (!message) {
+        throw new Error(`未找到成员ID为 ${memberId} 的聊天记录`);
+      }
+      message.remark = remark || '';
+      await this.saveTalkMessage(message);
+      return message;
+    }
+
+    /**
      * 设置元数据
      * @param {string} key - 键名
      * @param {*} value - 值
@@ -783,13 +799,41 @@
       });
     }
 
+    /**
+     * 清理旧备份文件（根据配置的保留策略）
+     * @returns {Promise<void>}
+     */
     async cleanOldBackups() {
       try {
         const backups = await this.listBackups();
-        if (backups.length > 30) {
-          const config = this.getConfig();
-          const toDelete = backups.slice(30);
+        if (backups.length === 0) return;
 
+        // 获取保留策略配置
+        const retentionType = GM_getValue(`retention_type_${this.site.id}_${this.userId}`, 'count');
+        const retentionCount = GM_getValue(`retention_count_${this.site.id}_${this.userId}`, 30);
+        const retentionDays = GM_getValue(`retention_days_${this.site.id}_${this.userId}`, 30);
+
+        let toDelete = [];
+
+        if (retentionType === 'count') {
+          // 按数量保留：删除超出数量的备份
+          if (backups.length > retentionCount) {
+            toDelete = backups.slice(retentionCount);
+          }
+        } else if (retentionType === 'days') {
+          // 按天数保留：删除超过指定天数的备份
+          const cutoffTime = new Date();
+          cutoffTime.setDate(cutoffTime.getDate() - retentionDays);
+
+          toDelete = backups.filter(backup => {
+            const backupTime = new Date(backup.lastModified);
+            return backupTime < cutoffTime;
+          });
+        }
+
+        // 执行删除
+        if (toDelete.length > 0) {
+          const config = this.getConfig();
           for (const backup of toDelete) {
             const deleteUrl = this.buildFullUrl(backup.href);
             await new Promise((resolve, reject) => {
@@ -811,6 +855,7 @@
               });
             });
           }
+          Utils.log(`WebDAV: 已清理 ${toDelete.length} 个旧备份`);
         }
       } catch (error) {
         Utils.error("清理旧备份失败", error);
@@ -924,14 +969,43 @@
       });
     }
 
+    /**
+     * 清理旧备份文件（根据配置的保留策略）
+     * @returns {Promise<void>}
+     */
     async cleanOldBackups() {
       try {
         const cfg = this.getConfig();
         if (!cfg?.workerBaseUrl || !cfg?.authToken) return;
         const base = cfg.workerBaseUrl.replace(/\/$/, "");
         const backups = await this.listBackups();
-        if (backups.length > 30) {
-          const toDelete = backups.slice(30);
+        if (backups.length === 0) return;
+
+        // 获取保留策略配置
+        const retentionType = GM_getValue(`retention_type_${this.site.id}_${this.userId}`, 'count');
+        const retentionCount = GM_getValue(`retention_count_${this.site.id}_${this.userId}`, 30);
+        const retentionDays = GM_getValue(`retention_days_${this.site.id}_${this.userId}`, 30);
+
+        let toDelete = [];
+
+        if (retentionType === 'count') {
+          // 按数量保留：删除超出数量的备份
+          if (backups.length > retentionCount) {
+            toDelete = backups.slice(retentionCount);
+          }
+        } else if (retentionType === 'days') {
+          // 按天数保留：删除超过指定天数的备份
+          const cutoffTime = new Date();
+          cutoffTime.setDate(cutoffTime.getDate() - retentionDays);
+
+          toDelete = backups.filter(backup => {
+            const backupTime = new Date(backup.lastModified);
+            return backupTime < cutoffTime;
+          });
+        }
+
+        // 执行删除
+        if (toDelete.length > 0) {
           for (const b of toDelete) {
             await new Promise((resolve, reject) => {
               GM_xmlhttpRequest({
@@ -945,6 +1019,7 @@
               });
             });
           }
+          Utils.log(`R2: 已清理 ${toDelete.length} 个旧备份`);
         }
       } catch (e) {
         Utils.error("清理 R2 旧备份失败", e);
@@ -1270,56 +1345,102 @@
     showBackupConfig(backupProvider, onSave) {
       const site = this.site;
       const userId = backupProvider.userId;
-      const providerTypeKey = `backup_provider_type_${site.id}_${userId}`;
-      const currentType = GM_getValue(providerTypeKey, "webdav");
 
-      const webdav = backupProvider instanceof WebDAVBackupProvider
-        ? backupProvider.getConfig() || {}
-        : (new WebDAVBackupProvider(userId, site).getConfig() || {});
-      const r2cfg = backupProvider instanceof R2WorkerBackupProvider
-        ? backupProvider.getConfig() || {}
-        : (new R2WorkerBackupProvider(userId, site).getConfig() || {});
+      // 读取启用状态配置
+      const webdavEnabled = GM_getValue(`backup_webdav_enabled_${site.id}_${userId}`, true);
+      const r2Enabled = GM_getValue(`backup_r2_enabled_${site.id}_${userId}`, false);
+
+      const webdav = new WebDAVBackupProvider(userId, site).getConfig() || {};
+      const r2cfg = new R2WorkerBackupProvider(userId, site).getConfig() || {};
 
       const content = `
-        <div class="nodeseek-form-group">
-          <label>备份提供者</label>
-          <select id="backup-provider-type">
-            <option value="webdav" ${currentType === 'webdav' ? 'selected' : ''}>WebDAV</option>
-            <option value="r2worker" ${currentType === 'r2worker' ? 'selected' : ''}>Cloudflare R2 (Worker)</option>
-          </select>
+        <div style="margin-bottom: 20px; padding: 10px; background: #f0f9ff; border-radius: 4px; border-left: 4px solid #0ea5e9;">
+          <strong>💡 提示：</strong>可以同时启用多个备份位置，实现双重备份保护
         </div>
-        <div id="section-webdav" style="display: ${currentType==='webdav'?'block':'none'};">
-          <div class="nodeseek-form-group">
-            <label>服务器地址</label>
-            <input type="url" id="webdav-server" value="${webdav.serverUrl || ''}" placeholder="https://dav.jianguoyun.com/dav/">
+
+        <!-- WebDAV 配置 -->
+        <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; margin-bottom: 12px;">
+            <label style="display: flex; align-items: center; font-weight: bold; font-size: 16px;">
+              <input type="checkbox" id="webdav-enable" ${webdavEnabled ? 'checked' : ''} style="margin-right: 8px; width: 18px; height: 18px;">
+              WebDAV 备份
+            </label>
           </div>
-          <div class="nodeseek-form-group">
-            <label>用户名</label>
-            <input type="text" id="webdav-username" value="${webdav.username || ''}" placeholder="用户名">
-          </div>
-          <div class="nodeseek-form-group">
-            <label>密码</label>
-            <input type="password" id="webdav-password" value="${webdav.password || ''}" placeholder="密码">
-          </div>
-          <div class="nodeseek-form-group">
-            <label>备份路径</label>
-            <input type="text" id="webdav-path" value="${webdav.backupPath || '/ns_df_messages_backup/'}" placeholder="/ns_df_messages_backup/">
-          </div>
-        </div>
-        <div id="section-r2worker" style="display: ${currentType==='r2worker'?'block':'none'};">
-          <div class="nodeseek-form-group">
-            <label>Worker 基址</label>
-            <input type="url" id="r2-base" value="${r2cfg.workerBaseUrl || ''}" placeholder="https://your-worker.workers.dev">
-          </div>
-          <div class="nodeseek-form-group">
-            <label>授权 Token（必填）</label>
-            <input type="text" id="r2-token" value="${r2cfg.authToken || ''}" placeholder="与 Worker 端 AUTH_TOKEN 一致">
-          </div>
-          <div class="nodeseek-form-group">
-            <label>基础路径</label>
-            <input type="text" id="r2-basepath" value="${r2cfg.basePath || '/ns_df_messages_backup/'}" placeholder="/ns_df_messages_backup/">
+          <div id="section-webdav" style="display: ${webdavEnabled ? 'block' : 'none'};">
+            <div class="nodeseek-form-group">
+              <label>服务器地址</label>
+              <input type="url" id="webdav-server" value="${webdav.serverUrl || ''}" placeholder="https://dav.jianguoyun.com/dav/">
+            </div>
+            <div class="nodeseek-form-group">
+              <label>用户名</label>
+              <input type="text" id="webdav-username" value="${webdav.username || ''}" placeholder="用户名">
+            </div>
+            <div class="nodeseek-form-group">
+              <label>密码</label>
+              <input type="password" id="webdav-password" value="${webdav.password || ''}" placeholder="密码">
+            </div>
+            <div class="nodeseek-form-group">
+              <label>备份路径</label>
+              <input type="text" id="webdav-path" value="${webdav.backupPath || '/ns_df_messages_backup/'}" placeholder="/ns_df_messages_backup/">
+            </div>
           </div>
         </div>
+
+        <!-- R2 Worker 配置 -->
+        <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; margin-bottom: 12px;">
+            <label style="display: flex; align-items: center; font-weight: bold; font-size: 16px;">
+              <input type="checkbox" id="r2-enable" ${r2Enabled ? 'checked' : ''} style="margin-right: 8px; width: 18px; height: 18px;">
+              Cloudflare R2 备份
+            </label>
+          </div>
+          <div id="section-r2worker" style="display: ${r2Enabled ? 'block' : 'none'};">
+            <div class="nodeseek-form-group">
+              <label>Worker 基址</label>
+              <input type="url" id="r2-base" value="${r2cfg.workerBaseUrl || ''}" placeholder="https://your-worker.workers.dev">
+            </div>
+            <div class="nodeseek-form-group">
+              <label>授权 Token（必填）</label>
+              <input type="text" id="r2-token" value="${r2cfg.authToken || ''}" placeholder="与 Worker 端 AUTH_TOKEN 一致">
+            </div>
+            <div class="nodeseek-form-group">
+              <label>基础路径</label>
+              <input type="text" id="r2-basepath" value="${r2cfg.basePath || '/ns_df_messages_backup/'}" placeholder="/ns_df_messages_backup/">
+            </div>
+          </div>
+        </div>
+
+        <!-- 备份保留策略配置 -->
+        <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <div style="font-weight: bold; font-size: 16px; margin-bottom: 12px;">📦 备份保留策略</div>
+          <div style="margin-bottom: 12px;">
+            <label style="display: flex; align-items: center; margin-bottom: 8px;">
+              <input type="radio" name="retention-type" value="count" ${GM_getValue(`retention_type_${site.id}_${userId}`, 'count') === 'count' ? 'checked' : ''} style="margin-right: 8px;">
+              按数量保留
+            </label>
+            <div style="margin-left: 24px;">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                保留最近
+                <input type="number" id="retention-count" value="${GM_getValue(`retention_count_${site.id}_${userId}`, 30)}" min="1" max="999" style="width: 80px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                份备份
+              </label>
+            </div>
+          </div>
+          <div>
+            <label style="display: flex; align-items: center; margin-bottom: 8px;">
+              <input type="radio" name="retention-type" value="days" ${GM_getValue(`retention_type_${site.id}_${userId}`, 'count') === 'days' ? 'checked' : ''} style="margin-right: 8px;">
+              按天数保留
+            </label>
+            <div style="margin-left: 24px;">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                保留最近
+                <input type="number" id="retention-days" value="${GM_getValue(`retention_days_${site.id}_${userId}`, 30)}" min="1" max="365" style="width: 80px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                天的备份
+              </label>
+            </div>
+          </div>
+        </div>
+
         <div style="text-align: right; margin-top: 20px;">
           <button class="nodeseek-btn nodeseek-btn-secondary" id="backup-cancel">取消</button>
           <button class="nodeseek-btn nodeseek-btn-success" id="backup-save">保存</button>
@@ -1328,22 +1449,37 @@
 
       const modal = this.createModal("备份设置", content);
 
-      // 切换 provider 显示
-      const typeSelect = modal.querySelector('#backup-provider-type');
+      // 切换 WebDAV 显示
+      const webdavEnableCheckbox = modal.querySelector('#webdav-enable');
       const secWebdav = modal.querySelector('#section-webdav');
+      webdavEnableCheckbox.addEventListener('change', () => {
+        secWebdav.style.display = webdavEnableCheckbox.checked ? 'block' : 'none';
+      });
+
+      // 切换 R2 显示
+      const r2EnableCheckbox = modal.querySelector('#r2-enable');
       const secR2 = modal.querySelector('#section-r2worker');
-      typeSelect.addEventListener('change', () => {
-        const v = typeSelect.value;
-        secWebdav.style.display = v === 'webdav' ? 'block' : 'none';
-        secR2.style.display = v === 'r2worker' ? 'block' : 'none';
+      r2EnableCheckbox.addEventListener('change', () => {
+        secR2.style.display = r2EnableCheckbox.checked ? 'block' : 'none';
       });
 
       modal.querySelector('#backup-cancel').addEventListener('click', () => modal.remove());
       modal.querySelector('#backup-save').addEventListener('click', () => {
-        const t = typeSelect.value;
-        GM_setValue(providerTypeKey, t);
+        const webdavChecked = webdavEnableCheckbox.checked;
+        const r2Checked = r2EnableCheckbox.checked;
 
-        if (t === 'webdav') {
+        // 至少要启用一个备份方式
+        if (!webdavChecked && !r2Checked) {
+          alert('请至少启用一种备份方式');
+          return;
+        }
+
+        // 保存启用状态
+        GM_setValue(`backup_webdav_enabled_${site.id}_${userId}`, webdavChecked);
+        GM_setValue(`backup_r2_enabled_${site.id}_${userId}`, r2Checked);
+
+        // 保存 WebDAV 配置
+        if (webdavChecked) {
           const newConfig = {
             serverUrl: modal.querySelector('#webdav-server').value.trim(),
             username: modal.querySelector('#webdav-username').value.trim(),
@@ -1355,7 +1491,10 @@
             return;
           }
           new WebDAVBackupProvider(userId, site).saveConfig(newConfig);
-        } else if (t === 'r2worker') {
+        }
+
+        // 保存 R2 配置
+        if (r2Checked) {
           const newConfig = {
             workerBaseUrl: modal.querySelector('#r2-base').value.trim(),
             authToken: modal.querySelector('#r2-token').value.trim(),
@@ -1366,6 +1505,24 @@
           new R2WorkerBackupProvider(userId, site).saveConfig(newConfig);
         }
 
+        // 保存备份保留策略配置
+        const retentionType = modal.querySelector('input[name="retention-type"]:checked').value;
+        const retentionCount = parseInt(modal.querySelector('#retention-count').value);
+        const retentionDays = parseInt(modal.querySelector('#retention-days').value);
+
+        if (retentionType === 'count' && (isNaN(retentionCount) || retentionCount < 1)) {
+          alert('请输入有效的保留数量（至少1份）');
+          return;
+        }
+        if (retentionType === 'days' && (isNaN(retentionDays) || retentionDays < 1)) {
+          alert('请输入有效的保留天数（至少1天）');
+          return;
+        }
+
+        GM_setValue(`retention_type_${site.id}_${userId}`, retentionType);
+        GM_setValue(`retention_count_${site.id}_${userId}`, retentionCount);
+        GM_setValue(`retention_days_${site.id}_${userId}`, retentionDays);
+
         modal.remove();
         if (onSave) onSave();
       });
@@ -1375,12 +1532,16 @@
      * 显示历史聊天记录
      * @param {Array} chatData - 聊天数据数组
      * @param {boolean} showLatest - 是否显示最新聊天，默认false
+     * @param {number} userId - 当前用户ID
      * @returns {HTMLElement} 模态框元素
      */
-    showHistoryChats(chatData, showLatest = false) {
+    showHistoryChats(chatData, showLatest = false, userId = null) {
       const sortedChats = chatData
         .filter((chat) => showLatest || !chat.isLatest)
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      // 构建标题，包含用户ID
+      const titleText = userId ? `历史私信 (用户ID: ${userId})` : '历史私信';
 
       let content = `
                 <div style="margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap;">
@@ -1406,15 +1567,19 @@
             const chatUrl = this.site.chatUrl(chat.member_id);
           const timeStr = Utils.parseUTCToLocal(chat.created_at);
 
+          // 构建备注显示
+          const remarkText = chat.remark ? ` (备注: ${chat.remark})` : '';
+
           content += `
                         <div class="nodeseek-chat-item">
                             <img class="nodeseek-chat-avatar" src="${avatarUrl}" alt="${
             chat.member_name
           }" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNlMGUwZTAiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSIjOTk5Ii8+CjxwYXRoIGQ9Ik0xMiAxNEM5LjMzIDEzLjk5IDcuMDEgMTUuNjIgNiAxOEMxMC4wMSAyMCAxMy45OSAyMCAxOCAxOEMxNi45OSAxNS42MiAxNC42NyAxMy45OSAxMiAxNFoiIGZpbGw9IiM5OTkiLz4KPC9zdmc+Cjwvc3ZnPgo='">
                             <div class="nodeseek-chat-info">
-                                <div class="nodeseek-chat-name">${
-                                  chat.member_name
-                                } (ID: ${chat.member_id})</div>
+                                <div class="nodeseek-chat-name">
+                                    ${chat.member_name} (ID: ${chat.member_id})${remarkText}
+                                    <button class="nodeseek-remark-btn" data-member-id="${chat.member_id}" data-member-name="${chat.member_name}" data-remark="${chat.remark || ''}" title="编辑备注" style="margin-left: 8px; cursor: pointer; background: none; border: none; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: background 0.2s;">✏️</button>
+                                </div>
                                 <div class="nodeseek-chat-message">${chat.content
                                   .replace(/<[^>]*>/g, "")
                                   .substring(0, 50)}${
@@ -1432,7 +1597,7 @@
 
       content += "</div>";
 
-      return this.createModal("历史聊天记录", content, {
+      return this.createModal(titleText, content, {
         width: "800px",
         height: "600px",
       });
@@ -1801,17 +1966,21 @@
     }
 
     /**
-     * 执行备份操作
+     * 执行备份（支持同时备份到多个位置）
      * @returns {Promise<void>}
      */
     async performBackup() {
       try {
-        const config = this.backup.getConfig();
-        if (!config) {
-          Utils.log("WebDAV未配置，跳过备份");
-          throw new Error("WebDAV未配置");
+        // 获取启用状态
+        const webdavEnabled = GM_getValue(`backup_webdav_enabled_${this.site.id}_${this.userId}`, true);
+        const r2Enabled = GM_getValue(`backup_r2_enabled_${this.site.id}_${this.userId}`, false);
+
+        if (!webdavEnabled && !r2Enabled) {
+          Utils.log("未启用任何备份方式，跳过备份");
+          throw new Error("未配置任何备份方式");
         }
 
+        // 准备备份数据
         const allChats = await this.db.getAllTalkMessages();
         const metadata = {
           userId: this.userId,
@@ -1824,11 +1993,78 @@
           chats: allChats,
         };
 
-        const filename = await this.backup.uploadBackup(backupData);
-        await this.backup.cleanOldBackups();
+        const results = [];
+        const errors = [];
 
-        GM_setValue(`last_backup_${this.site.id}_${this.userId}`, Date.now());
-        Utils.log(`备份完成: ${filename}`);
+        // 并行备份到多个位置
+        const backupPromises = [];
+
+        if (webdavEnabled) {
+          const webdavProvider = new WebDAVBackupProvider(this.userId, this.site);
+          const webdavConfig = webdavProvider.getConfig();
+          if (webdavConfig && webdavConfig.serverUrl) {
+            backupPromises.push(
+              webdavProvider.uploadBackup(backupData)
+                .then(async (filename) => {
+                  await webdavProvider.cleanOldBackups();
+                  results.push(`WebDAV: ${filename}`);
+                  Utils.log(`WebDAV备份完成: ${filename}`);
+                })
+                .catch((err) => {
+                  errors.push(`WebDAV失败: ${err.message}`);
+                  Utils.error("WebDAV备份失败", err);
+                })
+            );
+          } else {
+            Utils.log("WebDAV已启用但未配置，跳过");
+          }
+        }
+
+        if (r2Enabled) {
+          const r2Provider = new R2WorkerBackupProvider(this.userId, this.site);
+          const r2Config = r2Provider.getConfig();
+          if (r2Config && r2Config.workerBaseUrl) {
+            backupPromises.push(
+              r2Provider.uploadBackup(backupData)
+                .then(async (filename) => {
+                  await r2Provider.cleanOldBackups();
+                  results.push(`R2: ${filename}`);
+                  Utils.log(`R2备份完成: ${filename}`);
+                })
+                .catch((err) => {
+                  errors.push(`R2失败: ${err.message}`);
+                  Utils.error("R2备份失败", err);
+                })
+            );
+          } else {
+            Utils.log("R2已启用但未配置，跳过");
+          }
+        }
+
+        // 检查是否有实际配置的备份方式
+        if (backupPromises.length === 0) {
+          throw new Error("未配置任何备份服务器，请先在备份设置中配置");
+        }
+
+        // 等待所有备份完成
+        await Promise.all(backupPromises);
+
+        // 更新最后备份时间
+        if (results.length > 0) {
+          GM_setValue(`last_backup_${this.site.id}_${this.userId}`, Date.now());
+          Utils.log(`备份完成: ${results.join(', ')}`);
+        }
+
+        // 如果所有备份都失败，抛出错误
+        if (errors.length > 0 && results.length === 0) {
+          throw new Error(`所有备份均失败: ${errors.join('; ')}`);
+        }
+
+        // 如果部分成功，记录警告
+        if (errors.length > 0) {
+          Utils.log(`备份部分成功。成功: ${results.join(', ')}; 失败: ${errors.join('; ')}`);
+        }
+
       } catch (error) {
         Utils.error("备份失败", error);
         throw error;
@@ -1868,7 +2104,7 @@
     async showHistoryChats() {
       try {
         const allChats = await this.db.getAllTalkMessages();
-        const modal = this.ui.showHistoryChats(allChats, this.showLatestChats);
+        const modal = this.ui.showHistoryChats(allChats, this.showLatestChats, this.userId);
 
         // 绑定事件
         modal
@@ -1905,7 +2141,7 @@
 
         modal
           .querySelector("#show-latest-toggle")
-          .addEventListener("change", (e) => {
+          .addEventListener("change", async (e) => {
             this.showLatestChats = e.target.checked;
             GM_setValue(
               `show_latest_chats_${this.site.id}_${this.userId}`,
@@ -1914,33 +2150,203 @@
             this.ui.showToast(
               e.target.checked ? "已显示最新聊天" : "已隐藏最新聊天"
             );
-            modal.remove();
-            this.showHistoryChats();
+
+            // 重新渲染聊天列表而不关闭模态框
+            const allChats = await this.db.getAllTalkMessages();
+            const chatListContainer = modal.querySelector('.nodeseek-modal-body > div:last-child');
+            if (chatListContainer) {
+              // 过滤和排序聊天
+              const sortedChats = allChats
+                .filter((chat) => this.showLatestChats || !chat.isLatest)
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+              // 生成新的聊天列表 HTML
+              let newContent = '';
+              if (sortedChats.length === 0) {
+                newContent = '<div style="text-align: center; color: #666; padding: 40px;">暂无历史聊天记录</div>';
+              } else {
+                sortedChats.forEach((chat) => {
+                  const avatarUrl = this.site.avatarUrl(chat.member_id);
+                  const chatUrl = this.site.chatUrl(chat.member_id);
+                  const timeStr = Utils.parseUTCToLocal(chat.created_at);
+                  const remarkText = chat.remark ? ` (备注: ${chat.remark})` : '';
+
+                  newContent += `
+                    <div class="nodeseek-chat-item">
+                      <img class="nodeseek-chat-avatar" src="${avatarUrl}" alt="${chat.member_name}" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiNlMGUwZTAiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4PSI4IiB5PSI4Ij4KPHBhdGggZD0iTTEyIDEyQzE0LjIwOTEgMTIgMTYgMTAuMjA5MSAxNiA4QzE2IDUuNzkwODYgMTQuMjA5MSA0IDEyIDRDOS43OTA4NiA0IDggNS43OTA4NiA4IDhDOCAxMC4yMDkxIDkuNzkwODYgMTIgMTIgMTJaIiBmaWxsPSIjOTk5Ii8+CjxwYXRoIGQ9Ik0xMiAxNEM5LjMzIDEzLjk5IDcuMDEgMTUuNjIgNiAxOEMxMC4wMSAyMCAxMy45OSAyMCAxOCAxOEMxNi45OSAxNS42MiAxNC42NyAxMy45OSAxMiAxNFoiIGZpbGw9IiM5OTkiLz4KPC9zdmc+Cjwvc3ZnPgo='">
+                      <div class="nodeseek-chat-info">
+                        <div class="nodeseek-chat-name">
+                          ${chat.member_name} (ID: ${chat.member_id})${remarkText}
+                          <button class="nodeseek-remark-btn" data-member-id="${chat.member_id}" data-member-name="${chat.member_name}" data-remark="${chat.remark || ''}" title="编辑备注" style="margin-left: 8px; cursor: pointer; background: none; border: none; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: background 0.2s;">✏️</button>
+                        </div>
+                        <div class="nodeseek-chat-message">${chat.content.replace(/<[^>]*>/g, "").substring(0, 50)}${chat.content.length > 50 ? "..." : ""}</div>
+                      </div>
+                      <div class="nodeseek-chat-time">${timeStr}</div>
+                      <div class="nodeseek-chat-actions">
+                        <a href="${chatUrl}" target="_blank" class="nodeseek-btn" style="text-decoration: none; font-size: 12px; padding: 4px 8px;">打开对话</a>
+                      </div>
+                    </div>
+                  `;
+                });
+              }
+
+              // 更新容器内容
+              chatListContainer.innerHTML = newContent;
+
+              // 重新绑定备注编辑按钮事件
+              chatListContainer.querySelectorAll(".nodeseek-remark-btn").forEach((btn) => {
+                btn.addEventListener("click", async (e) => {
+                  e.preventDefault();
+                  const memberId = parseInt(btn.getAttribute("data-member-id"));
+                  const memberName = btn.getAttribute("data-member-name");
+                  const currentRemark = btn.getAttribute("data-remark");
+
+                  const newRemark = prompt(
+                    `编辑 ${memberName} 的备注：\n\n留空可删除备注`,
+                    currentRemark
+                  );
+
+                  if (newRemark === null) return;
+
+                  try {
+                    await this.db.updateRemark(memberId, newRemark.trim());
+                    await this.performBackup();
+                    this.ui.showToast("备注已更新并同步备份");
+
+                    // 再次刷新列表
+                    modal.querySelector("#show-latest-toggle").dispatchEvent(new Event('change'));
+                  } catch (error) {
+                    this.ui.showToast("更新备注失败: " + error.message, "error");
+                    Utils.error("更新备注失败", error);
+                  }
+                });
+              });
+            }
           });
+
+        // 绑定备注编辑按钮事件
+        modal.querySelectorAll(".nodeseek-remark-btn").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            const memberId = parseInt(btn.getAttribute("data-member-id"));
+            const memberName = btn.getAttribute("data-member-name");
+            const currentRemark = btn.getAttribute("data-remark");
+
+            // 使用prompt获取新备注
+            const newRemark = prompt(
+              `编辑 ${memberName} 的备注：\n\n留空可删除备注`,
+              currentRemark
+            );
+
+            // 用户点击取消则不操作
+            if (newRemark === null) return;
+
+            try {
+              // 更新数据库
+              await this.db.updateRemark(memberId, newRemark.trim());
+
+              // 触发备份
+              await this.performBackup();
+
+              // 刷新UI
+              this.ui.showToast("备注已更新并同步备份");
+              modal.remove();
+              this.showHistoryChats();
+            } catch (error) {
+              this.ui.showToast("更新备注失败: " + error.message, "error");
+              Utils.error("更新备注失败", error);
+            }
+          });
+        });
       } catch (error) {
         Utils.error("显示历史聊天失败", error);
       }
     }
 
     /**
-     * 显示恢复选项
+     * 显示恢复选项（支持选择备份来源）
      * @returns {Promise<void>}
      */
     async showRestoreOptions() {
       try {
-        Utils.debug("正在获取备份列表...");
-        const backups = await this.backup.listBackups();
+        // 获取启用状态
+        const webdavEnabled = GM_getValue(`backup_webdav_enabled_${this.site.id}_${this.userId}`, true);
+        const r2Enabled = GM_getValue(`backup_r2_enabled_${this.site.id}_${this.userId}`, false);
+
+        // 显示来源选择界面
+        let sourceContent = `
+          <div style="margin-bottom: 20px; padding: 12px; background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 4px;">
+            <strong>💡 提示：</strong>请选择要从哪个位置恢复备份
+          </div>
+          <div style="display: flex; gap: 12px; justify-content: center;">
+        `;
+
+        if (webdavEnabled) {
+          sourceContent += `
+            <button class="nodeseek-btn nodeseek-btn-success" id="restore-from-webdav" style="flex: 1; padding: 20px;">
+              <div style="font-size: 18px; margin-bottom: 8px;">📁</div>
+              <div style="font-weight: bold;">WebDAV</div>
+              <div style="font-size: 12px; opacity: 0.8;">从 WebDAV 恢复</div>
+            </button>
+          `;
+        }
+
+        if (r2Enabled) {
+          sourceContent += `
+            <button class="nodeseek-btn nodeseek-btn-success" id="restore-from-r2" style="flex: 1; padding: 20px;">
+              <div style="font-size: 18px; margin-bottom: 8px;">☁️</div>
+              <div style="font-weight: bold;">Cloudflare R2</div>
+              <div style="font-size: 12px; opacity: 0.8;">从 R2 恢复</div>
+            </button>
+          `;
+        }
+
+        sourceContent += "</div>";
+
+        const sourceModal = this.ui.createModal("选择备份来源", sourceContent, { width: "500px" });
+
+        // WebDAV 恢复
+        sourceModal.querySelector('#restore-from-webdav')?.addEventListener('click', async () => {
+          sourceModal.remove();
+          await this.showRestoreListFromProvider(new WebDAVBackupProvider(this.userId, this.site), "WebDAV");
+        });
+
+        // R2 恢复
+        sourceModal.querySelector('#restore-from-r2')?.addEventListener('click', async () => {
+          sourceModal.remove();
+          await this.showRestoreListFromProvider(new R2WorkerBackupProvider(this.userId, this.site), "R2");
+        });
+
+      } catch (error) {
+        Utils.error("显示恢复选项失败", error);
+        this.ui.showToast("获取恢复选项失败: " + error.message, "error");
+      }
+    }
+
+    /**
+     * 从指定提供者显示备份列表
+     * @param {Object} provider - 备份提供者实例
+     * @param {string} providerName - 提供者名称
+     * @returns {Promise<void>}
+     */
+    async showRestoreListFromProvider(provider, providerName) {
+      try {
+        Utils.debug(`正在从 ${providerName} 获取备份列表...`);
+        const backups = await provider.listBackups();
 
         if (backups.length === 0) {
-          this.ui.showToast("没有找到备份文件", "warning");
+          this.ui.showToast(`${providerName} 没有找到备份文件`, "warning");
           return;
         }
 
-        Utils.debug(`找到 ${backups.length} 个备份文件`);
+        Utils.debug(`从 ${providerName} 找到 ${backups.length} 个备份文件`);
 
         let content = `
                     <div style="margin-bottom: 16px; padding: 12px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; font-size: 14px;">
                         <strong>⚠️ 重要提示：</strong>恢复操作会<strong>完全覆盖</strong>现有的本地聊天数据，原有数据将被删除且无法恢复！
+                    </div>
+                    <div style="margin-bottom: 12px; padding: 8px; background: #f0f9ff; border-radius: 4px; text-align: center;">
+                        <strong>备份来源：${providerName}</strong>
                     </div>
                     <div style="max-height: 300px; overflow-y: auto;">
                 `;
@@ -1951,6 +2357,7 @@
           content += `
                         <div style="padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;"
                              data-backup="${backup.href}"
+                             data-provider="${providerName}"
                              onmouseover="this.style.background='#f8f9fa'"
                              onmouseout="this.style.background='transparent'">
                             <div style="font-weight: 500; margin-bottom: 4px;">备份 ${
@@ -1969,60 +2376,47 @@
 
         modal.querySelectorAll("[data-backup]").forEach((item) => {
           item.addEventListener("click", async () => {
-            const backupPath = item.dataset.backup;
-            const fileName = backupPath.split("/").pop();
-
-            // 确认对话框
+            const backupHref = item.dataset.backup;
+            const providerType = item.dataset.provider;
             if (
               confirm(
-                `⚠️ 确定要恢复备份文件 "${fileName}" 吗？\n\n警告：此操作会完全覆盖现有的本地聊天数据！\n原有数据将被永久删除且无法恢复！\n\n请确认您真的要继续此操作。`
+                `确定要从 ${providerType} 恢复此备份吗？\n\n⚠️ 此操作将完全覆盖本地数据，无法撤销！`
               )
             ) {
               modal.remove();
-
-              // 显示恢复进度
-              this.ui.showToast("正在恢复备份，请稍候...", "info", 10000);
-
               try {
-                await this.restoreFromBackup(backupPath);
+                this.ui.showToast(`正在从 ${providerType} 恢复备份...`, "info");
+                await this.restoreFromBackup(backupHref, provider);
+                this.ui.showToast("恢复成功！页面将自动刷新", "success");
+                setTimeout(() => location.reload(), 1500);
               } catch (error) {
-                Utils.error("恢复过程中出错", error);
+                Utils.error("恢复失败", error);
+                this.ui.showToast("恢复失败: " + error.message, "error");
               }
             }
           });
         });
       } catch (error) {
-        Utils.error("获取备份列表失败", error);
-
-        let errorMessage = "获取备份列表失败";
-        if (error.message.includes("401")) {
-          errorMessage = "WebDAV认证失败，请检查用户名和密码";
-        } else if (error.message.includes("403")) {
-          errorMessage = "WebDAV权限不足，请检查账户权限";
-        } else if (error.message.includes("404")) {
-          errorMessage = "WebDAV备份目录不存在";
-        } else if (error.message.includes("网络")) {
-          errorMessage = "网络连接失败，请检查网络连接";
-        }
-
-        this.ui.showToast(errorMessage, "error", 5000);
+        Utils.error(`从 ${providerName} 获取备份列表失败`, error);
+        this.ui.showToast(`获取 ${providerName} 备份列表失败: ` + error.message, "error");
       }
     }
 
     /**
      * 从备份恢复数据
      * @param {string} backupPath - 备份文件路径
+     * @param {Object} provider - 备份提供者实例
      * @returns {Promise<void>}
      */
-    async restoreFromBackup(backupPath) {
+    async restoreFromBackup(backupPath, provider) {
       try {
-        const config = this.backup.getConfig();
+        const config = provider.getConfig();
         if (!config) {
           throw new Error("备份提供者未配置");
         }
 
         // 构建正确的URL
-        const url = this.backup.buildFullUrl(backupPath);
+        const url = provider.buildFullUrl(backupPath);
         Utils.debug(`正在从以下URL恢复备份: ${url}`);
 
         const response = await new Promise((resolve, reject) => {
@@ -2030,10 +2424,10 @@
             method: "GET",
             url: url,
             headers: {
-              ...(this.backup instanceof WebDAVBackupProvider
+              ...(provider instanceof WebDAVBackupProvider
                 ? { Authorization: `Basic ${btoa(`${config.username}:${config.password}`)}` }
                 : {}),
-              ...(this.backup instanceof R2WorkerBackupProvider && config.authToken
+              ...(provider instanceof R2WorkerBackupProvider && config.authToken
                 ? { Authorization: `Bearer ${config.authToken}` }
                 : {}),
               Accept: "application/json",

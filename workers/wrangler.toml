@@ -9,7 +9,8 @@ compatibility_flags = ["nodejs_compat"]
 AUTH_TOKEN = ""  # 请在 Dashboard 设置真实值
 ALLOWED_ORIGINS = "https://www.nodeseek.com,https://www.deepflood.com"
 
-# R2 存储绑定（推荐在 Dashboard 中配置）
-# [[r2_buckets]]
-# binding = "R2_BUCKET"
-# bucket_name = "your-r2-bucket-name"
+# R2 存储绑定（占位符，防止部署时被删除）
+# 实际绑定请在 Cloudflare Dashboard 中配置
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = ""  # 请在 Dashboard 绑定实际的 R2 存储桶

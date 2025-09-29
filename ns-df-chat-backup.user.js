@@ -927,7 +927,19 @@
             if (response.status >= 200 && response.status < 300) {
               resolve(filename);
             } else {
-              reject(new Error(`R2 上传失败: ${response.status} ${response.statusText}`));
+              // 尝试解析 JSON 错误响应
+              let errorMsg = `R2 上传失败: ${response.status}`;
+              try {
+                const errorData = JSON.parse(response.responseText);
+                if (errorData.message) {
+                  errorMsg = `R2 上传失败: ${errorData.message}`;
+                } else if (errorData.error) {
+                  errorMsg = `R2 上传失败: ${errorData.error}`;
+                }
+              } catch (e) {
+                errorMsg = `R2 上传失败: ${response.status} ${response.statusText}`;
+              }
+              reject(new Error(errorMsg));
             }
           },
           onerror: (error) => reject(new Error(`R2 上传网络错误: ${error?.message || "未知错误"}`)),
@@ -1089,7 +1101,12 @@
         attributeFilter: ["class"],
       });
 
+      // 立即检查一次
       this.checkMessagePage();
+
+      // 再次延迟检查，确保按钮添加成功
+      setTimeout(() => this.checkMessagePage(), 100);
+      setTimeout(() => this.checkMessagePage(), 500);
     }
 
     /**
@@ -1611,7 +1628,7 @@
       this.ensureStylesLoaded();
 
       const existingBtn = document.querySelector(".nodeseek-history-btn");
-      if (existingBtn) existingBtn.remove();
+      if (existingBtn) return; // 按钮已存在，无需重复添加
 
       const appSwitch = document.querySelector(".app-switch");
       const messageLink = appSwitch?.querySelector(
@@ -1619,7 +1636,7 @@
       );
 
       if (!appSwitch || !messageLink) {
-        Utils.debug("app-switch 或私信链接元素不存在，无法添加按钮");
+        Utils.debug("app-switch 或私信链接元素不存在，将稍后重试");
         return;
       }
 

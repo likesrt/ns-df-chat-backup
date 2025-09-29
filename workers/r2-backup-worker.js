@@ -145,26 +145,33 @@ async function ensureParentPrefixes(bucket, key) {
  * 处理上传
  */
 async function handleUpload(request, env) {
-  assertAuth(request, env);
-  const body = await parseJsonBody(request, env);
-  const key = normalizeKey(String(body.key || ''));
-  if (!key) return json({ error: 'missing_key' }, 400, request, env);
-  const data = body.data ?? null;
-  if (data === null || typeof data === 'undefined') {
-    return json({ error: 'missing_data' }, 400, request, env);
+  try {
+    assertAuth(request, env);
+    const body = await parseJsonBody(request, env);
+    const key = normalizeKey(String(body.key || ''));
+    if (!key) return json({ error: 'missing_key' }, 400, request, env);
+    const data = body.data ?? null;
+    if (data === null || typeof data === 'undefined') {
+      return json({ error: 'missing_data' }, 400, request, env);
+    }
+
+    if (!env.R2_BUCKET) {
+      console.error('R2_BUCKET not bound');
+      return json({ error: 'r2_not_configured', message: 'R2_BUCKET not bound. Please bind R2 bucket in Workers settings.' }, 500, request, env);
+    }
+
+    await ensureParentPrefixes(env.R2_BUCKET, key);
+    const jsonData = JSON.stringify(data);
+    const putRes = await env.R2_BUCKET.put(key, jsonData, {
+      httpMetadata: { contentType: 'application/json; charset=utf-8' },
+    });
+
+    return json({ ok: true, key, size: putRes.size }, 200, request, env);
+  } catch (error) {
+    console.error('Upload error:', error);
+    if (error instanceof Response) throw error;
+    return json({ error: 'upload_failed', message: error?.message || String(error) }, 500, request, env);
   }
-
-  if (!env.R2_BUCKET) {
-    return json({ error: 'r2_not_configured', message: 'R2_BUCKET not bound' }, 500, request, env);
-  }
-
-  await ensureParentPrefixes(env.R2_BUCKET, key);
-  const jsonData = JSON.stringify(data);
-  const putRes = await env.R2_BUCKET.put(key, jsonData, {
-    httpMetadata: { contentType: 'application/json; charset=utf-8' },
-  });
-
-  return json({ ok: true, key, size: putRes.size }, 200, request, env);
 }
 
 /**
@@ -270,8 +277,9 @@ export default {
       if (method === 'POST' && pathname === '/ensure') return await handleEnsure(request, env);
       return text('not found', 404, request, env);
     } catch (err) {
+      console.error(`Error handling ${method} ${pathname}:`, err);
       if (err instanceof Response) return err;
-      return json({ error: 'internal_error', message: err?.message || String(err) }, 500, request, env);
+      return json({ error: 'internal_error', message: err?.message || String(err), stack: err?.stack }, 500, request, env);
     }
   },
 };

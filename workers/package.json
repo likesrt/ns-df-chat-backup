@@ -1,0 +1,26 @@
+{
+  "name": "r2-backup-worker",
+  "version": "2.0.0",
+  "description": "Cloudflare Worker for backup storage with R2 and S3 compatibility",
+  "main": "r2-backup-worker.js",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "wrangler": "^4.40.2"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "r2",
+    "s3",
+    "backup",
+    "storage"
+  ],
+  "author": "",
+  "license": "MIT"
+}

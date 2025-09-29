@@ -1707,6 +1707,183 @@
         }, 300);
       }, duration);
     }
+
+    /**
+     * 显示自定义输入框（限制 10 个中文字符）
+     * @param {string} title - 标题
+     * @param {string} defaultValue - 默认值
+     * @param {string} placeholder - 占位文本
+     * @returns {Promise<string|null>} - 返回用户输入或 null（取消）
+     */
+    showInputDialog(title, defaultValue = "", placeholder = "") {
+      return new Promise((resolve) => {
+        // 创建遮罩层
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.5);
+          z-index: 10000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0;
+          transition: opacity 0.2s;
+        `;
+
+        // 创建对话框
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+          background: white;
+          border-radius: 8px;
+          padding: 20px;
+          min-width: 320px;
+          max-width: 400px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+          transform: scale(0.9);
+          transition: transform 0.2s;
+        `;
+
+        // 标题
+        const titleEl = document.createElement("div");
+        titleEl.style.cssText = `
+          font-size: 16px;
+          font-weight: bold;
+          margin-bottom: 16px;
+          color: #333;
+        `;
+        titleEl.textContent = title;
+
+        // 输入框
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = defaultValue;
+        input.placeholder = placeholder;
+        input.maxLength = 10; // 限制 10 个字符
+        input.style.cssText = `
+          width: 100%;
+          padding: 8px 12px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          font-size: 14px;
+          box-sizing: border-box;
+          outline: none;
+        `;
+
+        // 字符计数
+        const counter = document.createElement("div");
+        counter.style.cssText = `
+          text-align: right;
+          font-size: 12px;
+          color: #999;
+          margin-top: 4px;
+        `;
+        counter.textContent = `${input.value.length}/10`;
+
+        // 更新字符计数
+        input.addEventListener("input", () => {
+          counter.textContent = `${input.value.length}/10`;
+          if (input.value.length >= 10) {
+            counter.style.color = "#dc3545";
+          } else {
+            counter.style.color = "#999";
+          }
+        });
+
+        // 按钮容器
+        const buttons = document.createElement("div");
+        buttons.style.cssText = `
+          display: flex;
+          gap: 10px;
+          margin-top: 16px;
+          justify-content: flex-end;
+        `;
+
+        // 取消按钮
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "取消";
+        cancelBtn.style.cssText = `
+          padding: 8px 16px;
+          border: 1px solid #ddd;
+          background: white;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 14px;
+        `;
+        cancelBtn.addEventListener("click", () => {
+          closeDialog(null);
+        });
+
+        // 确定按钮
+        const confirmBtn = document.createElement("button");
+        confirmBtn.textContent = "确定";
+        confirmBtn.style.cssText = `
+          padding: 8px 16px;
+          border: none;
+          background: #007bff;
+          color: white;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 14px;
+        `;
+        confirmBtn.addEventListener("click", () => {
+          closeDialog(input.value);
+        });
+
+        // 组装元素
+        buttons.appendChild(cancelBtn);
+        buttons.appendChild(confirmBtn);
+        dialog.appendChild(titleEl);
+        dialog.appendChild(input);
+        dialog.appendChild(counter);
+        dialog.appendChild(buttons);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        // 关闭对话框函数
+        const closeDialog = (value) => {
+          overlay.style.opacity = "0";
+          dialog.style.transform = "scale(0.9)";
+          setTimeout(() => {
+            overlay.remove();
+            resolve(value);
+          }, 200);
+        };
+
+        // 显示动画
+        setTimeout(() => {
+          overlay.style.opacity = "1";
+          dialog.style.transform = "scale(1)";
+        }, 10);
+
+        // 自动聚焦并全选
+        setTimeout(() => {
+          input.focus();
+          input.select();
+        }, 250);
+
+        // 支持 Enter 确认和 Esc 取消
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            closeDialog(input.value);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            closeDialog(null);
+          }
+        });
+
+        // 点击遮罩层关闭
+        overlay.addEventListener("click", (e) => {
+          if (e.target === overlay) {
+            closeDialog(null);
+          }
+        });
+      });
+    }
   }
 
   /**
@@ -2061,11 +2238,14 @@
           throw new Error(`所有备份均失败: ${errors.join('; ')}`);
         }
 
-        // 如果部分成功，记录警告
+        // 如果部分成功，记录警告并返回部分成功信息
         if (errors.length > 0) {
-          Utils.log(`备份部分成功。成功: ${results.join(', ')}; 失败: ${errors.join('; ')}`);
+          const warningMsg = `备份部分成功\n✓ 成功: ${results.join(', ')}\n✗ 失败: ${errors.join('; ')}`;
+          Utils.log(warningMsg);
+          return { partial: true, message: warningMsg };
         }
 
+        return { partial: false };
       } catch (error) {
         Utils.error("备份失败", error);
         throw error;
@@ -2129,8 +2309,12 @@
           .querySelector("#backup-now-btn")
           .addEventListener("click", async () => {
             try {
-              await this.performBackup();
-              this.ui.showToast("备份完成");
+              const result = await this.performBackup();
+              if (result && result.partial) {
+                this.ui.showToast(result.message, "warning");
+              } else {
+                this.ui.showToast("备份完成");
+              }
             } catch (error) {
               this.ui.showToast("备份失败: " + error.message, "error");
             }
@@ -2202,9 +2386,10 @@
                   const memberName = btn.getAttribute("data-member-name");
                   const currentRemark = btn.getAttribute("data-remark");
 
-                  const newRemark = prompt(
-                    `编辑 ${memberName} 的备注：\n\n留空可删除备注`,
-                    currentRemark
+                  const newRemark = await this.ui.showInputDialog(
+                    `编辑 ${memberName} 的备注`,
+                    currentRemark,
+                    "留空可删除备注"
                   );
 
                   if (newRemark === null) return;
@@ -2233,10 +2418,11 @@
             const memberName = btn.getAttribute("data-member-name");
             const currentRemark = btn.getAttribute("data-remark");
 
-            // 使用prompt获取新备注
-            const newRemark = prompt(
-              `编辑 ${memberName} 的备注：\n\n留空可删除备注`,
-              currentRemark
+            // 使用自定义输入框获取新备注
+            const newRemark = await this.ui.showInputDialog(
+              `编辑 ${memberName} 的备注`,
+              currentRemark,
+              "留空可删除备注"
             );
 
             // 用户点击取消则不操作
@@ -2545,8 +2731,12 @@
 
       GM_registerMenuCommand("立即备份", async () => {
         try {
-          await this.performBackup();
-          this.ui.showToast("备份完成");
+          const result = await this.performBackup();
+          if (result && result.partial) {
+            this.ui.showToast(result.message, "warning");
+          } else {
+            this.ui.showToast("备份完成");
+          }
         } catch (error) {
           this.ui.showToast("备份失败: " + error.message, "error");
         }

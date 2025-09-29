@@ -892,6 +892,18 @@
       GM_setValue(this.configKey, JSON.stringify(config));
     }
 
+    /**
+     * 规范化 Worker Base URL（自动补全协议）
+     */
+    normalizeBaseUrl(url) {
+      if (!url) return "";
+      let base = url.trim().replace(/\/$/, "");
+      if (!/^https?:\/\//i.test(base)) {
+        base = `https://${base}`;
+      }
+      return base;
+    }
+
     buildKey(filename) {
       const cfg = this.getConfig();
       const base = (cfg?.basePath || "/ns_df_messages_backup/")
@@ -903,14 +915,15 @@
     buildFullUrl(key) {
       const cfg = this.getConfig();
       if (!cfg?.workerBaseUrl) throw new Error("R2 Worker 未配置");
-      const base = cfg.workerBaseUrl.replace(/\/$/, "");
+      const base = this.normalizeBaseUrl(cfg.workerBaseUrl);
       return `${base}/download?key=${encodeURIComponent(key)}`;
     }
 
     async uploadBackup(data) {
       const cfg = this.getConfig();
       if (!cfg?.workerBaseUrl || !cfg?.authToken) throw new Error("R2 Worker 未配置");
-      const base = cfg.workerBaseUrl.replace(/\/$/, "");
+
+      const base = this.normalizeBaseUrl(cfg.workerBaseUrl);
       const filename = `${this.site.id}_chat_backup_${Utils.formatDate(new Date())}.json`;
       const key = this.buildKey(filename);
 
@@ -962,7 +975,7 @@
     async listBackups() {
       const cfg = this.getConfig();
       if (!cfg?.workerBaseUrl || !cfg?.authToken) return [];
-      const base = cfg.workerBaseUrl.replace(/\/$/, "");
+      const base = this.normalizeBaseUrl(cfg.workerBaseUrl);
       const prefix = this.buildKey("").replace(/\/$/, "");
       const url = `${base}/list?prefix=${encodeURIComponent(prefix)}`;
 
@@ -1027,7 +1040,7 @@
       try {
         const cfg = this.getConfig();
         if (!cfg?.workerBaseUrl || !cfg?.authToken) return;
-        const base = cfg.workerBaseUrl.replace(/\/$/, "");
+        const base = this.normalizeBaseUrl(cfg.workerBaseUrl);
         const backups = await this.listBackups();
         if (backups.length === 0) return;
 

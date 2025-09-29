@@ -58,8 +58,15 @@ btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
 **ALLOWED_ORIGINS**（推荐）：
 ```
 变量名：ALLOWED_ORIGINS
-值： https://www.nodeseek.com,https://www.deepflood.com
+值：https://www.nodeseek.com,https://www.deepflood.com
+环境：生产
 ```
+
+**重要提示**：
+- `wrangler.toml` 中已包含这些环境变量的占位符，防止部署时被删除
+- `AUTH_TOKEN` 在 `wrangler.toml` 中为空，**必须**在 Dashboard 中设置真实值
+- `ALLOWED_ORIGINS` 已设置默认值，可根据需要在 Dashboard 中修改
+- Dashboard 中的值会覆盖 `wrangler.toml` 的值
 
 2. 点击 **保存**
 

@@ -530,7 +530,7 @@
     constructor(userId, site) {
       this.userId = userId;
       this.site = site;
-      this.configKey = `webdav_config_${site.id}_${userId}`;
+      this.configKey = `webdav_config`; // 全局共享配置（所有网站、所有用户通用）
     }
 
     /**
@@ -880,7 +880,7 @@
     constructor(userId, site) {
       this.userId = userId;
       this.site = site;
-      this.configKey = `r2worker_config_${site.id}_${userId}`;
+      this.configKey = `r2worker_config`; // 全局共享配置（所有网站、所有用户通用）
     }
 
     getConfig() {
@@ -1401,9 +1401,9 @@
       const site = this.site;
       const userId = backupProvider.userId;
 
-      // 读取启用状态配置
-      const webdavEnabled = GM_getValue(`backup_webdav_enabled_${site.id}_${userId}`, true);
-      const r2Enabled = GM_getValue(`backup_r2_enabled_${site.id}_${userId}`, false);
+      // 读取启用状态配置（全局共享）
+      const webdavEnabled = GM_getValue(`backup_webdav_enabled`, true);
+      const r2Enabled = GM_getValue(`backup_r2_enabled`, false);
 
       const webdav = new WebDAVBackupProvider(userId, site).getConfig() || {};
       const r2cfg = new R2WorkerBackupProvider(userId, site).getConfig() || {};
@@ -1529,9 +1529,9 @@
           return;
         }
 
-        // 保存启用状态
-        GM_setValue(`backup_webdav_enabled_${site.id}_${userId}`, webdavChecked);
-        GM_setValue(`backup_r2_enabled_${site.id}_${userId}`, r2Checked);
+        // 保存启用状态（全局共享）
+        GM_setValue(`backup_webdav_enabled`, webdavChecked);
+        GM_setValue(`backup_r2_enabled`, r2Checked);
 
         // 保存 WebDAV 配置
         if (webdavChecked) {
@@ -1991,8 +1991,7 @@
         await this.db.init();
 
       // 初始化备份提供者（默认 webdav，可在"备份设置"中切换）
-      const providerTypeKey = `backup_provider_type_${this.site.id}_${this.userId}`;
-      const providerType = GM_getValue(providerTypeKey, "webdav");
+      const providerType = GM_getValue("backup_provider_type", "webdav");
       this.backup = providerType === "r2worker"
         ? new R2WorkerBackupProvider(this.userId, this.site)
         : new WebDAVBackupProvider(this.userId, this.site);
@@ -2205,8 +2204,8 @@
     async performBackup() {
       try {
         // 获取启用状态
-        const webdavEnabled = GM_getValue(`backup_webdav_enabled_${this.site.id}_${this.userId}`, true);
-        const r2Enabled = GM_getValue(`backup_r2_enabled_${this.site.id}_${this.userId}`, false);
+        const webdavEnabled = GM_getValue(`backup_webdav_enabled`, true);
+        const r2Enabled = GM_getValue(`backup_r2_enabled`, false);
 
         if (!webdavEnabled && !r2Enabled) {
           Utils.log("未启用任何备份方式，跳过备份");
@@ -2348,7 +2347,7 @@
           .addEventListener("click", () => {
             this.ui.showBackupConfig(this.backup, () => {
               const providerType = GM_getValue(
-                `backup_provider_type_${this.site.id}_${this.userId}`,
+                "backup_provider_type",
                 "webdav"
               );
               this.backup = providerType === "r2worker"
@@ -2512,8 +2511,8 @@
     async showRestoreOptions() {
       try {
         // 获取启用状态
-        const webdavEnabled = GM_getValue(`backup_webdav_enabled_${this.site.id}_${this.userId}`, true);
-        const r2Enabled = GM_getValue(`backup_r2_enabled_${this.site.id}_${this.userId}`, false);
+        const webdavEnabled = GM_getValue(`backup_webdav_enabled`, true);
+        const r2Enabled = GM_getValue(`backup_r2_enabled`, false);
 
         // 显示来源选择界面
         let sourceContent = `
@@ -2772,7 +2771,7 @@
       GM_registerMenuCommand("备份设置", () => {
         this.ui.showBackupConfig(this.backup, () => {
           const providerType = GM_getValue(
-            `backup_provider_type_${this.site.id}_${this.userId}`,
+            "backup_provider_type",
             "webdav"
           );
           this.backup = providerType === "r2worker"

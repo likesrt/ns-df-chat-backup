@@ -2229,14 +2229,40 @@
 
         // 准备备份数据
         const allChats = await this.db.getAllTalkMessages();
+
+        // 收集用户配置数据
+        const webdavProvider = new WebDAVBackupProvider(this.userId, this.site);
+        const r2Provider = new R2WorkerBackupProvider(this.userId, this.site);
+
+        const userConfig = {
+          // 备份启用状态
+          backup: {
+            webdav_enabled: GM_getValue(`backup_webdav_enabled`, true),
+            r2_enabled: GM_getValue(`backup_r2_enabled`, false),
+          },
+          // 保留策略
+          retention: {
+            type: GM_getValue('retention_type', 'count'),
+            count: GM_getValue('retention_count', 30),
+            days: GM_getValue('retention_days', 30),
+          },
+          // WebDAV 配置
+          webdav: webdavProvider.getConfig() || null,
+          // R2 配置
+          r2: r2Provider.getConfig() || null,
+        };
+
         const metadata = {
           userId: this.userId,
+          siteId: this.site,
           backupTime: new Date().toISOString(),
           totalChats: allChats.length,
+          version: '2.0.0', // 备份格式版本
         };
 
         const backupData = {
           metadata,
+          config: userConfig,
           chats: allChats,
         };
 
@@ -2779,14 +2805,67 @@
           let successCount = 0;
           for (const chat of response.chats) {
             try {
-              await this.db.saveTalkMessage(chat);
+              // 规范化聊天数据,确保包含所有必需字段
+              const normalizedChat = {
+                member_id: chat.member_id,
+                member_name: chat.member_name || '未知用户',
+                content: chat.content || '',
+                created_at: chat.created_at || new Date().toISOString(),
+                sender_id: chat.sender_id || 0,
+                receiver_id: chat.receiver_id || 0,
+                message_id: chat.message_id || chat.id || 0,
+                viewed: chat.viewed ?? false,
+                updated_at: chat.updated_at || new Date().toISOString(),
+                isLatest: chat.isLatest ?? false,
+                remark: chat.remark || '',  // 保留备注信息
+              };
+
+              await this.db.saveTalkMessage(normalizedChat);
               successCount++;
             } catch (dbError) {
               Utils.error(`保存聊天记录失败 (ID: ${chat.member_id})`, dbError);
             }
           }
 
-          const message = `恢复完成，已覆盖本地数据，共恢复 ${successCount} 条聊天记录`;
+          // 恢复配置数据（如果备份中包含）
+          if (response.config) {
+            Utils.debug("开始恢复配置数据...");
+            try {
+              // 恢复备份启用状态
+              if (response.config.backup) {
+                GM_setValue(`backup_webdav_enabled`, response.config.backup.webdav_enabled ?? true);
+                GM_setValue(`backup_r2_enabled`, response.config.backup.r2_enabled ?? false);
+                Utils.debug("备份启用状态已恢复");
+              }
+
+              // 恢复保留策略
+              if (response.config.retention) {
+                GM_setValue('retention_type', response.config.retention.type || 'count');
+                GM_setValue('retention_count', response.config.retention.count || 30);
+                GM_setValue('retention_days', response.config.retention.days || 30);
+                Utils.debug("保留策略已恢复");
+              }
+
+              // 恢复 WebDAV 配置
+              if (response.config.webdav && response.config.webdav.serverUrl) {
+                GM_setValue(`webdav_config`, JSON.stringify(response.config.webdav));
+                Utils.debug("WebDAV 配置已恢复");
+              }
+
+              // 恢复 R2 配置
+              if (response.config.r2 && response.config.r2.workerBaseUrl) {
+                GM_setValue(`r2worker_config`, JSON.stringify(response.config.r2));
+                Utils.debug("R2 配置已恢复");
+              }
+
+              Utils.log("配置数据恢复完成");
+            } catch (configError) {
+              Utils.error("恢复配置数据时出错", configError);
+              // 配置恢复失败不影响整体恢复流程
+            }
+          }
+
+          const message = `恢复完成，已覆盖本地数据，共恢复 ${successCount} 条聊天记录${response.config ? ' 和配置信息' : ''}`;
           Utils.log(message);
           this.ui.showToast(message);
         } else {

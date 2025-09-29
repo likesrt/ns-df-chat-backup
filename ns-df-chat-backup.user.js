@@ -20,6 +20,75 @@
   "use strict";
 
   /**
+   * 通用的用户ID获取方法（适用于NS和DF站点）
+   * @param {APIClient} api - API客户端实例
+   * @param {Object} site - 站点配置对象
+   * @returns {Promise<number>} 用户ID
+   */
+  async function resolveCurrentUserId(api, site) {
+    // 方法1: 通过系统通知用户ID推断
+    try {
+      const systemUserId = site.systemNotificationUserId;
+      Utils.debug(`尝试从系统通知会话获取用户ID (系统用户ID: ${systemUserId})...`);
+      const probe = await api.request(
+        `${api.baseUrl}/notification/message/with/${systemUserId}`
+      );
+      if (probe?.success && Array.isArray(probe.msgArray)) {
+        // 查找包含系统通知用户ID的消息，提取另一方的ID
+        for (const msg of probe.msgArray) {
+          if (msg.sender_id === systemUserId && Number.isFinite(msg.receiver_id)) {
+            Utils.debug(`方法1成功: sender_id=${systemUserId}, 用户ID=${msg.receiver_id}`);
+            return msg.receiver_id;
+          }
+          if (msg.receiver_id === systemUserId && Number.isFinite(msg.sender_id)) {
+            Utils.debug(`方法1成功: receiver_id=${systemUserId}, 用户ID=${msg.sender_id}`);
+            return msg.sender_id;
+          }
+        }
+      }
+      Utils.debug("方法1失败: 未找到有效的系统通知消息");
+    } catch (e) {
+      Utils.debug(`方法1失败: ${e?.message || e}`);
+    }
+
+    // 方法2: 发送测试消息后重试（特殊情况处理）
+    try {
+      Utils.debug("方法1未获取到用户ID，尝试发送测试消息...");
+      const systemUserId = site.systemNotificationUserId;
+      const sendResult = await api.sendMessage(systemUserId, "我的用户id", false);
+      if (sendResult?.success) {
+        Utils.debug("测试消息发送成功，等待500ms后重新尝试获取用户ID...");
+        // 等待一小段时间确保消息已写入
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // 重新请求系统通知会话
+        const probe = await api.request(
+          `${api.baseUrl}/notification/message/with/${systemUserId}`
+        );
+        if (probe?.success && Array.isArray(probe.msgArray)) {
+          for (const msg of probe.msgArray) {
+            if (msg.sender_id === systemUserId && Number.isFinite(msg.receiver_id)) {
+              Utils.debug(`方法2成功: sender_id=${systemUserId}, 用户ID=${msg.receiver_id}`);
+              return msg.receiver_id;
+            }
+            if (msg.receiver_id === systemUserId && Number.isFinite(msg.sender_id)) {
+              Utils.debug(`方法2成功: receiver_id=${systemUserId}, 用户ID=${msg.sender_id}`);
+              return msg.sender_id;
+            }
+          }
+        }
+        Utils.debug("方法2失败: 发送测试消息后仍未找到有效数据");
+      } else {
+        Utils.debug("方法2失败: 测试消息发送失败");
+      }
+    } catch (e) {
+      Utils.debug(`方法2失败: ${e?.message || e}`);
+    }
+
+    throw new Error("无法获取用户ID，请确保已登录");
+  }
+
+  /**
    * 站点适配注册表
    */
   const SiteRegistry = [
@@ -29,6 +98,7 @@
       hosts: ["www.nodeseek.com"],
       apiBase: "https://www.nodeseek.com/api",
       referer: "https://www.nodeseek.com/",
+      systemNotificationUserId: 5230, // 系统通知用户ID
       avatarUrl: (memberId) => `https://www.nodeseek.com/avatar/${memberId}.png`,
       chatUrl: (memberId) =>
         `https://www.nodeseek.com/notification#/message?mode=talk&to=${memberId}`,
@@ -39,37 +109,7 @@
         );
         return !!messageLink?.classList.contains("router-link-active");
       },
-      resolveCurrentUserId: async (api) => {
-        // 优先通过消息列表与某个会话回推当前用户ID
-        try {
-          const list = await api.getMessageList();
-          if (list?.success && Array.isArray(list.msgArray) && list.msgArray.length) {
-            const first = list.msgArray[0];
-            const candidate = first.sender_id || first.receiver_id;
-            const convo = await api.getChatMessages(candidate);
-            if (
-              convo?.success &&
-              Array.isArray(convo.msgArray) &&
-              convo.msgArray.length > 0
-            ) {
-              const m = convo.msgArray[0];
-              const myId = m.sender_id === candidate ? m.receiver_id : m.sender_id;
-              if (Number.isFinite(myId)) return myId;
-            }
-          }
-        } catch (_) {}
-
-        // 兜底方案（兼容旧实现，稳定性较弱）
-        try {
-          const probe = await api.request(
-            `${api.baseUrl}/notification/message/with/5230`
-          );
-          if (probe?.success && Array.isArray(probe.msgArray) && probe.msgArray.length) {
-            return probe.msgArray[0].receiver_id;
-          }
-        } catch (_) {}
-        throw new Error("无法获取用户ID");
-      },
+      resolveCurrentUserId,
     },
     {
       id: "df",
@@ -77,6 +117,7 @@
       hosts: ["www.deepflood.com"],
       apiBase: "https://www.deepflood.com/api",
       referer: "https://www.deepflood.com/",
+      systemNotificationUserId: 10, // 系统通知用户ID
       avatarUrl: (memberId) => `https://www.deepflood.com/avatar/${memberId}.png`,
       chatUrl: (memberId) =>
         `https://www.deepflood.com/notification#/message?mode=talk&to=${memberId}`,
@@ -87,25 +128,7 @@
         );
         return !!messageLink?.classList.contains("router-link-active");
       },
-      resolveCurrentUserId: async (api) => {
-        // 与 NS 相同的推断策略，必要时可独立调整
-        const list = await api.getMessageList();
-        if (list?.success && Array.isArray(list.msgArray) && list.msgArray.length) {
-          const first = list.msgArray[0];
-          const candidate = first.sender_id || first.receiver_id;
-          const convo = await api.getChatMessages(candidate);
-          if (
-            convo?.success &&
-            Array.isArray(convo.msgArray) &&
-            convo.msgArray.length > 0
-          ) {
-            const m = convo.msgArray[0];
-            const myId = m.sender_id === candidate ? m.receiver_id : m.sender_id;
-            if (Number.isFinite(myId)) return myId;
-          }
-        }
-        throw new Error("无法获取用户ID");
-      },
+      resolveCurrentUserId,
     },
   ];
 
@@ -118,8 +141,8 @@
    * 工具函数集合
    */
   const Utils = {
-    // Debug开关，设置为false可以减少日志输出，true显示详细日志
-    DEBUG: false,
+    // Debug开关，设置为 false 可以减少日志输出, true 显示详细日志
+    DEBUG: true,
 
     /**
      * 格式化日期为文件名安全的字符串
@@ -396,7 +419,7 @@
     async getUserId() {
       try {
         Utils.debug("正在获取用户ID...");
-        const userId = await this.site.resolveCurrentUserId(this);
+        const userId = await this.site.resolveCurrentUserId(this, this.site);
         Utils.log(`获取到用户ID: ${userId}`);
         return userId;
       } catch (error) {
@@ -426,6 +449,55 @@
         `${this.baseUrl}/notification/message/list`
       );
       return data;
+    }
+
+    /**
+     * 发送消息
+     * @param {number} receiverUid - 接收者用户ID
+     * @param {string} content - 消息内容
+     * @param {boolean} markdown - 是否使用markdown格式
+     * @returns {Promise<Object>} 发送结果
+     */
+    async sendMessage(receiverUid, content, markdown = false) {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "POST",
+          url: `${this.baseUrl}/notification/message/send`,
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            Referer: this.referer,
+          },
+          data: JSON.stringify({
+            receiverUid: receiverUid,
+            content: content,
+            markdown: markdown,
+          }),
+          onload: (response) => {
+            try {
+              Utils.debug(`发送消息响应状态: ${response.status}`);
+              Utils.debug(`发送消息响应: ${response.responseText}`);
+
+              if (response.status !== 200) {
+                reject(
+                  new Error(
+                    `HTTP错误: ${response.status} ${response.statusText}`
+                  )
+                );
+                return;
+              }
+
+              const data = JSON.parse(response.responseText);
+              resolve(data);
+            } catch (e) {
+              Utils.error(`发送消息解析失败: ${response.responseText}`, e);
+              reject(new Error(`响应解析失败: ${e.message}`));
+            }
+          },
+          onerror: (error) => reject(error),
+          ontimeout: () => reject(new Error("请求超时")),
+        });
+      });
     }
   }
 

@@ -1,21 +1,118 @@
 // ==UserScript==
-// @name         NodeSeek 私信优化脚本
+// @name         NS-DF 私信优化脚本
 // @namespace    https://www.nodeseek.com/
 // @version      1.0.0
-// @description  NodeSeek 私信记录本地缓存与WebDAV备份
+// @description  NS-DF 私信记录本地缓存与 WebDAV 备份
 // @author       yuyan
 // @match        https://www.nodeseek.com/notification*
+// @match        https://www.deepflood.com/notification*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
 // @connect      www.nodeseek.com
+// @connect      www.deepflood.com
 // @connect      dav.jianguoyun.com
 // @connect      *
 // ==/UserScript==
 
 (function () {
   "use strict";
+
+  /**
+   * 站点适配注册表
+   */
+  const SiteRegistry = [
+    {
+      id: "ns",
+      label: "NodeSeek",
+      hosts: ["www.nodeseek.com"],
+      apiBase: "https://www.nodeseek.com/api",
+      referer: "https://www.nodeseek.com/",
+      avatarUrl: (memberId) => `https://www.nodeseek.com/avatar/${memberId}.png`,
+      chatUrl: (memberId) =>
+        `https://www.nodeseek.com/notification#/message?mode=talk&to=${memberId}`,
+      isMessageListPage: (doc) => {
+        const appSwitch = doc.querySelector(".app-switch");
+        const messageLink = appSwitch?.querySelector(
+          'a[href="#/message?mode=list"]'
+        );
+        return !!messageLink?.classList.contains("router-link-active");
+      },
+      resolveCurrentUserId: async (api) => {
+        // 优先通过消息列表与某个会话回推当前用户ID
+        try {
+          const list = await api.getMessageList();
+          if (list?.success && Array.isArray(list.msgArray) && list.msgArray.length) {
+            const first = list.msgArray[0];
+            const candidate = first.sender_id || first.receiver_id;
+            const convo = await api.getChatMessages(candidate);
+            if (
+              convo?.success &&
+              Array.isArray(convo.msgArray) &&
+              convo.msgArray.length > 0
+            ) {
+              const m = convo.msgArray[0];
+              const myId = m.sender_id === candidate ? m.receiver_id : m.sender_id;
+              if (Number.isFinite(myId)) return myId;
+            }
+          }
+        } catch (_) {}
+
+        // 兜底方案（兼容旧实现，稳定性较弱）
+        try {
+          const probe = await api.request(
+            `${api.baseUrl}/notification/message/with/5230`
+          );
+          if (probe?.success && Array.isArray(probe.msgArray) && probe.msgArray.length) {
+            return probe.msgArray[0].receiver_id;
+          }
+        } catch (_) {}
+        throw new Error("无法获取用户ID");
+      },
+    },
+    {
+      id: "df",
+      label: "DeepFlood",
+      hosts: ["www.deepflood.com"],
+      apiBase: "https://www.deepflood.com/api",
+      referer: "https://www.deepflood.com/",
+      avatarUrl: (memberId) => `https://www.deepflood.com/avatar/${memberId}.png`,
+      chatUrl: (memberId) =>
+        `https://www.deepflood.com/notification#/message?mode=talk&to=${memberId}`,
+      isMessageListPage: (doc) => {
+        const appSwitch = doc.querySelector(".app-switch");
+        const messageLink = appSwitch?.querySelector(
+          'a[href="#/message?mode=list"]'
+        );
+        return !!messageLink?.classList.contains("router-link-active");
+      },
+      resolveCurrentUserId: async (api) => {
+        // 与 NS 相同的推断策略，必要时可独立调整
+        const list = await api.getMessageList();
+        if (list?.success && Array.isArray(list.msgArray) && list.msgArray.length) {
+          const first = list.msgArray[0];
+          const candidate = first.sender_id || first.receiver_id;
+          const convo = await api.getChatMessages(candidate);
+          if (
+            convo?.success &&
+            Array.isArray(convo.msgArray) &&
+            convo.msgArray.length > 0
+          ) {
+            const m = convo.msgArray[0];
+            const myId = m.sender_id === candidate ? m.receiver_id : m.sender_id;
+            if (Number.isFinite(myId)) return myId;
+          }
+        }
+        throw new Error("无法获取用户ID");
+      },
+    },
+  ];
+
+  function detectActiveSite() {
+    const host = window.location.hostname;
+    return SiteRegistry.find((s) => s.hosts.includes(host));
+  }
 
   /**
    * 工具函数集合
@@ -54,7 +151,7 @@
     log(message, type = "info") {
       if (!this.DEBUG && type === "info") return;
       const typeStr = typeof type === "string" ? type.toUpperCase() : "INFO";
-      console.log(`[NodeSeek私信优化] ${typeStr}: ${message}`);
+      console.log(`[NS-DF私信优化] ${typeStr}: ${message}`);
     },
 
     /**
@@ -65,9 +162,9 @@
     debug(message, data = null) {
       if (!this.DEBUG) return;
       if (data !== null) {
-        console.log(`[NodeSeek私信优化] DEBUG: ${message}`, data);
+        console.log(`[NS-DF私信优化] DEBUG: ${message}`, data);
       } else {
-        console.log(`[NodeSeek私信优化] DEBUG: ${message}`);
+        console.log(`[NS-DF私信优化] DEBUG: ${message}`);
       }
     },
 
@@ -77,7 +174,7 @@
      * @param {Error|null} error - 错误对象，可选
      */
     error(message, error = null) {
-      console.error(`[NodeSeek私信优化] ERROR: ${message}`, error);
+      console.error(`[NS-DF私信优化] ERROR: ${message}`, error);
     },
 
     /**
@@ -85,7 +182,7 @@
      */
     enableDebug() {
       this.DEBUG = true;
-      console.log("[NodeSeek私信优化] 调试模式已开启");
+      console.log("[NS-DF私信优化] 调试模式已开启");
     },
 
     /**
@@ -93,7 +190,7 @@
      */
     disableDebug() {
       this.DEBUG = false;
-      console.log("[NodeSeek私信优化] 调试模式已关闭");
+      console.log("[NS-DF私信优化] 调试模式已关闭");
     },
   };
 
@@ -106,9 +203,10 @@
      * 构造函数
      * @param {number} userId - 用户ID
      */
-    constructor(userId) {
+    constructor(userId, site) {
       this.userId = userId;
-      this.dbName = `nodeseek_chat_${userId}`;
+      this.site = site;
+      this.dbName = `${site.id}_chat_${userId}`;
       this.version = 1;
       this.db = null;
     }
@@ -226,15 +324,17 @@
   }
 
   /**
-   * NodeSeek API 访问模块
-   * 用于与NodeSeek网站API进行交互
+   * 站点 API 客户端
+   * 用于跨站点统一访问接口
    */
-  class NodeSeekAPI {
+  class APIClient {
     /**
-     * 构造函数
+     * @param {object} site - 站点适配器
      */
-    constructor() {
-      this.baseUrl = "https://www.nodeseek.com/api";
+    constructor(site) {
+      this.site = site;
+      this.baseUrl = site.apiBase;
+      this.referer = site.referer;
     }
 
     /**
@@ -250,7 +350,7 @@
           url: url,
           headers: {
             Accept: "application/json",
-            Referer: "https://www.nodeseek.com/",
+            Referer: this.referer,
             ...options.headers,
           },
           onload: (response) => {
@@ -296,19 +396,9 @@
     async getUserId() {
       try {
         Utils.debug("正在获取用户ID...");
-        const data = await this.request(
-          `${this.baseUrl}/notification/message/with/5230`
-        );
-        Utils.debug("getUserId API响应:", data);
-
-        if (data.success && data.msgArray && data.msgArray.length > 0) {
-          const userId = data.msgArray[0].receiver_id;
-          Utils.log(`获取到用户ID: ${userId}`);
-          return userId;
-        }
-
-        Utils.error("API响应格式不正确或无数据", data);
-        throw new Error("无法获取用户ID: API响应格式不正确");
+        const userId = await this.site.resolveCurrentUserId(this);
+        Utils.log(`获取到用户ID: ${userId}`);
+        return userId;
       } catch (error) {
         Utils.error("获取用户ID失败", error);
         throw error;
@@ -343,14 +433,15 @@
    * WebDAV 备份模块
    * 用于将聊天记录备份到WebDAV服务器
    */
-  class WebDAVBackup {
+  class WebDAVBackupProvider {
     /**
      * 构造函数
      * @param {number} userId - 用户ID
      */
-    constructor(userId) {
+    constructor(userId, site) {
       this.userId = userId;
-      this.configKey = `webdav_config_${userId}`;
+      this.site = site;
+      this.configKey = `webdav_config_${site.id}_${userId}`;
     }
 
     /**
@@ -429,78 +520,54 @@
 
     async ensureDirectoryExists(directoryPath) {
       const config = this.getConfig();
-      if (!config) {
-        throw new Error("WebDAV 配置未设置");
-      }
+      if (!config) throw new Error("WebDAV 配置未设置");
 
-      const url = `${config.serverUrl.replace(
-        /\/$/,
-        ""
-      )}${directoryPath.replace(/\/$/, "")}/`;
+      const serverBase = config.serverUrl.replace(/\/$/, "");
+      // 规范化路径，逐级创建，确保父级存在
+      const normalized = ("/" + directoryPath).replace(/\/+$/, "");
+      const segments = normalized.split("/").filter(Boolean);
 
-      return new Promise((resolve, reject) => {
-        // 首先检查目录是否存在
-        GM_xmlhttpRequest({
-          method: "PROPFIND",
-          url: url,
-          headers: {
-            Authorization: `Basic ${btoa(
-              `${config.username}:${config.password}`
-            )}`,
-            Depth: "0",
-          },
-          onload: (response) => {
-            if (response.status >= 200 && response.status < 300) {
-              // 目录已存在
-              Utils.log(`目录已存在: ${directoryPath}`);
-              resolve();
-            } else if (response.status === 404) {
-              // 目录不存在，尝试创建
-              Utils.log(`目录不存在，正在创建: ${directoryPath}`);
-              GM_xmlhttpRequest({
-                method: "MKCOL",
-                url: url,
-                headers: {
-                  Authorization: `Basic ${btoa(
-                    `${config.username}:${config.password}`
-                  )}`,
-                },
-                onload: (createResponse) => {
-                  if (
-                    createResponse.status >= 200 &&
-                    createResponse.status < 300
-                  ) {
-                    Utils.log(`目录创建成功: ${directoryPath}`);
-                    resolve();
-                  } else {
-                    reject(
-                      new Error(
-                        `创建目录失败: ${createResponse.status} ${createResponse.statusText}`
-                      )
-                    );
-                  }
-                },
-                onerror: (error) =>
-                  reject(
-                    new Error(
-                      `创建目录网络错误: ${error?.message || "未知错误"}`
-                    )
-                  ),
-              });
-            } else {
-              reject(
-                new Error(
-                  `检查目录失败: ${response.status} ${response.statusText}`
-                )
-              );
-            }
-          },
-          onerror: (error) =>
-            reject(
-              new Error(`检查目录网络错误: ${error?.message || "未知错误"}`)
-            ),
+      let current = "";
+      for (const seg of segments) {
+        current += "/" + seg;
+        const url = `${serverBase}${current}/`;
+        // Depth:0 查询该层是否存在
+        const exists = await new Promise((resolve) => {
+          GM_xmlhttpRequest({
+            method: "PROPFIND",
+            url,
+            headers: {
+              Authorization: `Basic ${btoa(`${config.username}:${config.password}`)}`,
+              Depth: "0",
+            },
+            onload: (res) => {
+              resolve(res.status >= 200 && res.status < 300);
+            },
+            onerror: () => resolve(false),
+          });
         });
-      });
+
+        if (!exists) {
+          await new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+              method: "MKCOL",
+              url,
+              headers: {
+                Authorization: `Basic ${btoa(`${config.username}:${config.password}`)}`,
+              },
+              onload: (res) => {
+                if (res.status >= 200 && res.status < 300) {
+                  Utils.log(`已创建目录: ${current}`);
+                  resolve();
+                } else {
+                  reject(new Error(`创建目录失败: ${res.status} ${res.statusText}`));
+                }
+              },
+              onerror: (err) => reject(new Error(`创建目录网络错误: ${err?.message || "未知错误"}`)),
+            });
+          });
+        }
+      }
     }
 
     async uploadBackup(data, retryCount = 0) {
@@ -510,19 +577,17 @@
       }
 
       try {
-        // 确保备份目录存在
-        await this.ensureDirectoryExists(config.backupPath);
+        // 确保站点/用户专属目录存在：<backupPath>/<site>/<userId>
+        const userBackupPath = `${config.backupPath.replace(/\/$/, "")}/${this.site.id}/${this.userId}`;
+        await this.ensureDirectoryExists(userBackupPath);
       } catch (error) {
         throw new Error(`确保目录存在失败: ${error.message}`);
       }
 
-      const filename = `nodeseek_chat_backup_${Utils.formatDate(
+      const filename = `${this.site.id}_chat_backup_${Utils.formatDate(
         new Date()
       )}.json`;
-      const url = `${config.serverUrl.replace(
-        /\/$/,
-        ""
-      )}${config.backupPath.replace(/\/$/, "")}/${filename}`;
+      const url = `${config.serverUrl.replace(/\/$/, "")}${config.backupPath.replace(/\/$/, "")}/${this.site.id}/${this.userId}/${filename}`;
 
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -582,10 +647,8 @@
       const config = this.getConfig();
       if (!config) return [];
 
-      const url = `${config.serverUrl.replace(
-        /\/$/,
-        ""
-      )}${config.backupPath.replace(/\/$/, "")}/`;
+      // 在用户专属目录下列出备份
+      const url = `${config.serverUrl.replace(/\/$/, "")}${config.backupPath.replace(/\/$/, "")}/${this.site.id}/${this.userId}/`;
 
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -623,7 +686,7 @@
                 })
                 .filter((file) => {
                   const isBackupFile =
-                    file.href && file.href.includes("nodeseek_chat_backup_");
+                    file.href && file.href.includes(`${this.site.id}_chat_backup_`);
                   Utils.debug(`文件过滤: ${file.href} -> ${isBackupFile}`);
                   return isBackupFile;
                 })
@@ -684,6 +747,140 @@
   }
 
   /**
+   * R2 对象存储（通过 Cloudflare Worker）备份提供者
+   * 要求 Worker 暴露如下端点：
+   *  - POST /upload  { key: string, data: object }
+   *  - GET  /list?prefix=... -> { items: [{ key, lastModified }] }
+   *  - GET  /download?key=...  返回对象内容(JSON)
+   *  - DELETE /delete?key=...
+   */
+  class R2WorkerBackupProvider {
+    /**
+     * @param {number} userId - 用户ID
+     * @param {object} site - 站点适配器
+     */
+    constructor(userId, site) {
+      this.userId = userId;
+      this.site = site;
+      this.configKey = `r2worker_config_${site.id}_${userId}`;
+    }
+
+    getConfig() {
+      const config = GM_getValue(this.configKey, null);
+      return config ? JSON.parse(config) : null;
+    }
+
+    saveConfig(config) {
+      GM_setValue(this.configKey, JSON.stringify(config));
+    }
+
+    buildKey(filename) {
+      const cfg = this.getConfig();
+      const base = (cfg?.basePath || "/ns_df_messages_backup/")
+        .replace(/^\/+/, "")
+        .replace(/\/+$/, "");
+      return `${base}/${this.site.id}/${this.userId}/${filename}`;
+    }
+
+    buildFullUrl(key) {
+      const cfg = this.getConfig();
+      if (!cfg?.workerBaseUrl) throw new Error("R2 Worker 未配置");
+      const base = cfg.workerBaseUrl.replace(/\/$/, "");
+      return `${base}/download?key=${encodeURIComponent(key)}`;
+    }
+
+    async uploadBackup(data) {
+      const cfg = this.getConfig();
+      if (!cfg?.workerBaseUrl || !cfg?.authToken) throw new Error("R2 Worker 未配置");
+      const base = cfg.workerBaseUrl.replace(/\/$/, "");
+      const filename = `${this.site.id}_chat_backup_${Utils.formatDate(new Date())}.json`;
+      const key = this.buildKey(filename);
+
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "POST",
+          url: `${base}/upload`,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${cfg.authToken}`,
+          },
+          data: JSON.stringify({ key, data }),
+          onload: (response) => {
+            if (response.status >= 200 && response.status < 300) {
+              resolve(filename);
+            } else {
+              reject(new Error(`R2 上传失败: ${response.status} ${response.statusText}`));
+            }
+          },
+          onerror: (error) => reject(new Error(`R2 上传网络错误: ${error?.message || "未知错误"}`)),
+        });
+      });
+    }
+
+    async listBackups() {
+      const cfg = this.getConfig();
+      if (!cfg?.workerBaseUrl || !cfg?.authToken) return [];
+      const base = cfg.workerBaseUrl.replace(/\/$/, "");
+      const prefix = this.buildKey("").replace(/\/$/, "");
+
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: `${base}/list?prefix=${encodeURIComponent(prefix)}`,
+          headers: {
+            Authorization: `Bearer ${cfg.authToken}`,
+          },
+          onload: (response) => {
+            if (response.status >= 200 && response.status < 300) {
+              try {
+                const data = JSON.parse(response.responseText);
+                const items = (data.items || []).map((it) => ({
+                  href: it.key,
+                  lastModified: it.lastModified || new Date().toISOString(),
+                }));
+                items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+                resolve(items);
+              } catch (e) {
+                reject(new Error(`R2 列表解析失败: ${e.message}`));
+              }
+            } else {
+              reject(new Error(`R2 获取列表失败: ${response.status} ${response.statusText}`));
+            }
+          },
+          onerror: (error) => reject(new Error(`R2 获取列表网络错误: ${error?.message || "未知错误"}`)),
+        });
+      });
+    }
+
+    async cleanOldBackups() {
+      try {
+        const cfg = this.getConfig();
+        if (!cfg?.workerBaseUrl || !cfg?.authToken) return;
+        const base = cfg.workerBaseUrl.replace(/\/$/, "");
+        const backups = await this.listBackups();
+        if (backups.length > 30) {
+          const toDelete = backups.slice(30);
+          for (const b of toDelete) {
+            await new Promise((resolve, reject) => {
+              GM_xmlhttpRequest({
+                method: "DELETE",
+                url: `${base}/delete?key=${encodeURIComponent(b.href)}`,
+                headers: {
+                  Authorization: `Bearer ${cfg.authToken}`,
+                },
+                onload: () => resolve(),
+                onerror: (error) => reject(new Error(`R2 删除网络错误: ${error?.message || "未知错误"}`)),
+              });
+            });
+          }
+        }
+      } catch (e) {
+        Utils.error("清理 R2 旧备份失败", e);
+      }
+    }
+  }
+
+  /**
    * UI 管理模块
    * 负责用户界面的创建和管理
    */
@@ -691,11 +888,12 @@
     /**
      * 构造函数
      */
-    constructor() {
+    constructor(site) {
       this.modals = new Set();
       this.stylesLoaded = false;
       this.talkListObserver = null;
       this.lastTalkListPresent = false;
+      this.site = site;
     }
 
     /**
@@ -716,12 +914,7 @@
      * 检查私信页面状态
      */
     checkMessagePage() {
-      const appSwitch = document.querySelector(".app-switch");
-      const messageLink = appSwitch?.querySelector(
-        'a[href="#/message?mode=list"]'
-      );
-      const isMessagePage =
-        messageLink?.classList.contains("router-link-active");
+      const isMessagePage = this.site.isMessageListPage(document);
 
       if (isMessagePage !== this.lastTalkListPresent) {
         this.lastTalkListPresent = isMessagePage;
@@ -998,67 +1191,109 @@
     }
 
     /**
-     * 显示WebDAV配置对话框
-     * @param {WebDAVBackup} webdavBackup - WebDAV备份实例
+     * 显示备份配置对话框（支持 Provider 选择：WebDAV / R2 Worker）
+     * @param {Object} backupProvider - 备份提供者实例
      * @param {Function} onSave - 保存回调函数
      */
-    showWebDAVConfig(webdavBackup, onSave) {
-      const config = webdavBackup.getConfig() || {};
+    showBackupConfig(backupProvider, onSave) {
+      const site = this.site;
+      const userId = backupProvider.userId;
+      const providerTypeKey = `backup_provider_type_${site.id}_${userId}`;
+      const currentType = GM_getValue(providerTypeKey, "webdav");
+
+      const webdav = backupProvider instanceof WebDAVBackupProvider
+        ? backupProvider.getConfig() || {}
+        : (new WebDAVBackupProvider(userId, site).getConfig() || {});
+      const r2cfg = backupProvider instanceof R2WorkerBackupProvider
+        ? backupProvider.getConfig() || {}
+        : (new R2WorkerBackupProvider(userId, site).getConfig() || {});
 
       const content = `
-                <div class="nodeseek-form-group">
-                    <label>服务器地址</label>
-                    <input type="url" id="webdav-server" value="${
-                      config.serverUrl || ""
-                    }" placeholder="https://dav.jianguoyun.com/dav/">
-                </div>
-                <div class="nodeseek-form-group">
-                    <label>用户名</label>
-                    <input type="text" id="webdav-username" value="${
-                      config.username || ""
-                    }" placeholder="用户名">
-                </div>
-                <div class="nodeseek-form-group">
-                    <label>密码</label>
-                    <input type="password" id="webdav-password" value="${
-                      config.password || ""
-                    }" placeholder="密码">
-                </div>
-                <div class="nodeseek-form-group">
-                    <label>备份路径</label>
-                    <input type="text" id="webdav-path" value="${
-                      config.backupPath || "/nodeseek_messages_backup/"
-                    }" placeholder="/nodeseek_messages_backup/">
-                </div>
-                <div style="text-align: right; margin-top: 20px;">
-                    <button class="nodeseek-btn nodeseek-btn-secondary" id="webdav-cancel">取消</button>
-                    <button class="nodeseek-btn nodeseek-btn-success" id="webdav-save">保存</button>
-                </div>
-            `;
+        <div class="nodeseek-form-group">
+          <label>备份提供者</label>
+          <select id="backup-provider-type">
+            <option value="webdav" ${currentType === 'webdav' ? 'selected' : ''}>WebDAV</option>
+            <option value="r2worker" ${currentType === 'r2worker' ? 'selected' : ''}>Cloudflare R2 (Worker)</option>
+          </select>
+        </div>
+        <div id="section-webdav" style="display: ${currentType==='webdav'?'block':'none'};">
+          <div class="nodeseek-form-group">
+            <label>服务器地址</label>
+            <input type="url" id="webdav-server" value="${webdav.serverUrl || ''}" placeholder="https://dav.jianguoyun.com/dav/">
+          </div>
+          <div class="nodeseek-form-group">
+            <label>用户名</label>
+            <input type="text" id="webdav-username" value="${webdav.username || ''}" placeholder="用户名">
+          </div>
+          <div class="nodeseek-form-group">
+            <label>密码</label>
+            <input type="password" id="webdav-password" value="${webdav.password || ''}" placeholder="密码">
+          </div>
+          <div class="nodeseek-form-group">
+            <label>备份路径</label>
+            <input type="text" id="webdav-path" value="${webdav.backupPath || '/ns_df_messages_backup/'}" placeholder="/ns_df_messages_backup/">
+          </div>
+        </div>
+        <div id="section-r2worker" style="display: ${currentType==='r2worker'?'block':'none'};">
+          <div class="nodeseek-form-group">
+            <label>Worker 基址</label>
+            <input type="url" id="r2-base" value="${r2cfg.workerBaseUrl || ''}" placeholder="https://your-worker.workers.dev">
+          </div>
+          <div class="nodeseek-form-group">
+            <label>授权 Token（必填）</label>
+            <input type="text" id="r2-token" value="${r2cfg.authToken || ''}" placeholder="与 Worker 端 AUTH_TOKEN 一致">
+          </div>
+          <div class="nodeseek-form-group">
+            <label>基础路径</label>
+            <input type="text" id="r2-basepath" value="${r2cfg.basePath || '/ns_df_messages_backup/'}" placeholder="/ns_df_messages_backup/">
+          </div>
+        </div>
+        <div style="text-align: right; margin-top: 20px;">
+          <button class="nodeseek-btn nodeseek-btn-secondary" id="backup-cancel">取消</button>
+          <button class="nodeseek-btn nodeseek-btn-success" id="backup-save">保存</button>
+        </div>
+      `;
 
-      const modal = this.createModal("WebDAV 配置", content);
+      const modal = this.createModal("备份设置", content);
 
-      modal
-        .querySelector("#webdav-cancel")
-        .addEventListener("click", () => modal.remove());
-      modal.querySelector("#webdav-save").addEventListener("click", () => {
-        const newConfig = {
-          serverUrl: modal.querySelector("#webdav-server").value.trim(),
-          username: modal.querySelector("#webdav-username").value.trim(),
-          password: modal.querySelector("#webdav-password").value.trim(),
-          backupPath: modal.querySelector("#webdav-path").value.trim(),
-        };
+      // 切换 provider 显示
+      const typeSelect = modal.querySelector('#backup-provider-type');
+      const secWebdav = modal.querySelector('#section-webdav');
+      const secR2 = modal.querySelector('#section-r2worker');
+      typeSelect.addEventListener('change', () => {
+        const v = typeSelect.value;
+        secWebdav.style.display = v === 'webdav' ? 'block' : 'none';
+        secR2.style.display = v === 'r2worker' ? 'block' : 'none';
+      });
 
-        if (
-          !newConfig.serverUrl ||
-          !newConfig.username ||
-          !newConfig.password
-        ) {
-          alert("请填写完整的配置信息");
-          return;
+      modal.querySelector('#backup-cancel').addEventListener('click', () => modal.remove());
+      modal.querySelector('#backup-save').addEventListener('click', () => {
+        const t = typeSelect.value;
+        GM_setValue(providerTypeKey, t);
+
+        if (t === 'webdav') {
+          const newConfig = {
+            serverUrl: modal.querySelector('#webdav-server').value.trim(),
+            username: modal.querySelector('#webdav-username').value.trim(),
+            password: modal.querySelector('#webdav-password').value.trim(),
+            backupPath: modal.querySelector('#webdav-path').value.trim(),
+          };
+          if (!newConfig.serverUrl || !newConfig.username || !newConfig.password) {
+            alert('请填写完整的WebDAV配置信息');
+            return;
+          }
+          new WebDAVBackupProvider(userId, site).saveConfig(newConfig);
+        } else if (t === 'r2worker') {
+          const newConfig = {
+            workerBaseUrl: modal.querySelector('#r2-base').value.trim(),
+            authToken: modal.querySelector('#r2-token').value.trim(),
+            basePath: modal.querySelector('#r2-basepath').value.trim(),
+          };
+          if (!newConfig.workerBaseUrl) { alert('请填写 R2 Worker 基址'); return; }
+          if (!newConfig.authToken) { alert('请填写 R2 Worker 授权 Token'); return; }
+          new R2WorkerBackupProvider(userId, site).saveConfig(newConfig);
         }
 
-        webdavBackup.saveConfig(newConfig);
         modal.remove();
         if (onSave) onSave();
       });
@@ -1077,9 +1312,9 @@
 
       let content = `
                 <div style="margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap;">
-                    <button class="nodeseek-btn" id="webdav-config-btn">WebDAV设置</button>
+                    <button class="nodeseek-btn" id="backup-config-btn">备份设置</button>
                     <button class="nodeseek-btn nodeseek-btn-success" id="backup-now-btn">立即备份</button>
-                    <button class="nodeseek-btn nodeseek-btn-secondary" id="restore-btn">从WebDAV恢复</button>
+                    <button class="nodeseek-btn nodeseek-btn-secondary" id="restore-btn">从备份恢复</button>
                     <label style="display: flex; align-items: center; margin-left: auto;">
                         <input type="checkbox" id="show-latest-toggle" ${
                           showLatest ? "checked" : ""
@@ -1095,8 +1330,8 @@
           '<div style="text-align: center; color: #666; padding: 40px;">暂无历史聊天记录</div>';
       } else {
         sortedChats.forEach((chat) => {
-          const avatarUrl = `https://www.nodeseek.com/avatar/${chat.member_id}.png`;
-          const chatUrl = `https://www.nodeseek.com/notification#/message?mode=talk&to=${chat.member_id}`;
+            const avatarUrl = this.site.avatarUrl(chat.member_id);
+            const chatUrl = this.site.chatUrl(chat.member_id);
           const timeStr = Utils.parseUTCToLocal(chat.created_at);
 
           content += `
@@ -1244,15 +1479,16 @@
     /**
      * 构造函数
      */
-    constructor() {
-      this.api = new NodeSeekAPI();
+    constructor(site) {
+      this.site = site;
+      this.api = new APIClient(site);
       this.db = null;
-      this.webdav = null;
-      this.ui = new UIManager();
+      this.backup = null;
+      this.ui = new UIManager(site);
       this.userId = null;
       this.backupTimer = null;
       this.lastHash = "";
-      this.showLatestChats = GM_getValue("show_latest_chats", false);
+      this.showLatestChats = false;
     }
 
     /**
@@ -1263,23 +1499,38 @@
       try {
         Utils.debug("开始初始化脚本...");
 
-        // 检查是否在正确的域名
-        if (window.location.hostname !== "www.nodeseek.com") {
-          Utils.debug("不在NodeSeek域名，跳过初始化");
+        // 检查是否在支持的站点
+        if (!this.site) {
+          Utils.debug("不在支持站点，跳过初始化");
           return;
         }
 
         // 获取用户ID
         this.userId = await this.api.getUserId();
+        // 读取站点/用户专属的显示偏好
+        this.showLatestChats = GM_getValue(
+          `show_latest_chats_${this.site.id}_${this.userId}`,
+          false
+        );
 
         // 初始化数据库和WebDAV
-        this.db = new ChatDB(this.userId);
+        this.db = new ChatDB(this.userId, this.site);
         await this.db.init();
 
-        this.webdav = new WebDAVBackup(this.userId);
+      // 初始化备份提供者（默认 webdav，可在“备份设置”中切换）
+      const providerTypeKey = `backup_provider_type_${this.site.id}_${this.userId}`;
+      const providerType = GM_getValue(providerTypeKey, "webdav");
+      this.backup = providerType === "r2worker"
+        ? new R2WorkerBackupProvider(this.userId, this.site)
+        : new WebDAVBackupProvider(this.userId, this.site);
 
-        // 设置定时备份
-        this.setupAutoBackup();
+        // 打开页面后自动备份一次（静默忽略未配置等错误）
+        try {
+          await this.performBackup();
+        } catch (e) {
+          Utils.debug(`初始自动备份跳过: ${e?.message || e}`);
+        }
+        this._didInitialAutoBackup = true;
 
         // 监听页面变化
         this.setupPageListener();
@@ -1293,40 +1544,23 @@
         // 初始化talk-list监听器
         this.ui.initTalkListObserver();
 
-        Utils.log("NodeSeek私信优化脚本初始化完成");
+        Utils.log("NS-DF私信优化脚本初始化完成");
       } catch (error) {
         Utils.error("初始化失败", error);
         // 显示用户友好的错误提示
         if (error.message.includes("用户未登录")) {
-          console.warn("[NodeSeek私信优化] 请先登录NodeSeek账户");
+          console.warn("[NS-DF私信优化] 请先登录账户");
         } else if (error.message.includes("响应解析失败")) {
           console.warn(
-            "[NodeSeek私信优化] 网络请求失败，请检查网络连接或稍后重试"
+            "[NS-DF私信优化] 网络请求失败，请检查网络连接或稍后重试"
           );
         } else {
-          console.warn("[NodeSeek私信优化] 初始化失败，请刷新页面重试");
+          console.warn("[NS-DF私信优化] 初始化失败，请刷新页面重试");
         }
       }
     }
 
-    /**
-     * 设置自动备份
-     */
-    setupAutoBackup() {
-      this.backupTimer = setInterval(() => {
-        this.performBackup();
-      }, 6 * 60 * 60 * 1000);
-
-      document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) {
-          const lastBackup = GM_getValue(`last_backup_${this.userId}`, 0);
-          const now = Date.now();
-          if (now - lastBackup > 6 * 60 * 60 * 1000) {
-            this.performBackup();
-          }
-        }
-      });
-    }
+    // 定时自动备份已移除：改为页面打开与数据变更时触发备份
 
     /**
      * 设置页面监听器
@@ -1475,8 +1709,15 @@
           }
 
           if (hasUpdates) {
-            this.performBackup();
+            // 数据变更后立即自动备份
+            try { await this.performBackup(); } catch (e) { Utils.debug(`自动备份跳过: ${e?.message || e}`); }
           }
+        }
+
+        // 打开消息列表页时自动备份一次（即使无变更）
+        if (!this._didInitialAutoBackup) {
+          try { await this.performBackup(); } catch (e) { Utils.debug(`初始页面备份跳过: ${e?.message || e}`); }
+          this._didInitialAutoBackup = true;
         }
       } catch (error) {
         if (error.message === "用户未登录") {
@@ -1493,7 +1734,7 @@
      */
     async performBackup() {
       try {
-        const config = this.webdav.getConfig();
+        const config = this.backup.getConfig();
         if (!config) {
           Utils.log("WebDAV未配置，跳过备份");
           throw new Error("WebDAV未配置");
@@ -1511,10 +1752,10 @@
           chats: allChats,
         };
 
-        const filename = await this.webdav.uploadBackup(backupData);
-        await this.webdav.cleanOldBackups();
+        const filename = await this.backup.uploadBackup(backupData);
+        await this.backup.cleanOldBackups();
 
-        GM_setValue(`last_backup_${this.userId}`, Date.now());
+        GM_setValue(`last_backup_${this.site.id}_${this.userId}`, Date.now());
         Utils.log(`备份完成: ${filename}`);
       } catch (error) {
         Utils.error("备份失败", error);
@@ -1559,11 +1800,18 @@
 
         // 绑定事件
         modal
-          .querySelector("#webdav-config-btn")
+          .querySelector("#backup-config-btn")
           .addEventListener("click", () => {
-            this.ui.showWebDAVConfig(this.webdav, () => {
-              Utils.log("WebDAV配置已保存");
-              this.ui.showToast("WebDAV配置已保存");
+            this.ui.showBackupConfig(this.backup, () => {
+              const providerType = GM_getValue(
+                `backup_provider_type_${this.site.id}_${this.userId}`,
+                "webdav"
+              );
+              this.backup = providerType === "r2worker"
+                ? new R2WorkerBackupProvider(this.userId, this.site)
+                : new WebDAVBackupProvider(this.userId, this.site);
+              Utils.log("备份配置已保存");
+              this.ui.showToast("备份配置已保存");
               this.performBackup();
             });
           });
@@ -1587,7 +1835,10 @@
           .querySelector("#show-latest-toggle")
           .addEventListener("change", (e) => {
             this.showLatestChats = e.target.checked;
-            GM_setValue("show_latest_chats", this.showLatestChats);
+            GM_setValue(
+              `show_latest_chats_${this.site.id}_${this.userId}`,
+              this.showLatestChats
+            );
             this.ui.showToast(
               e.target.checked ? "已显示最新聊天" : "已隐藏最新聊天"
             );
@@ -1606,7 +1857,7 @@
     async showRestoreOptions() {
       try {
         Utils.debug("正在获取备份列表...");
-        const backups = await this.webdav.listBackups();
+        const backups = await this.backup.listBackups();
 
         if (backups.length === 0) {
           this.ui.showToast("没有找到备份文件", "warning");
@@ -1693,13 +1944,13 @@
      */
     async restoreFromBackup(backupPath) {
       try {
-        const config = this.webdav.getConfig();
+        const config = this.backup.getConfig();
         if (!config) {
-          throw new Error("WebDAV配置未设置");
+          throw new Error("备份提供者未配置");
         }
 
         // 构建正确的URL
-        const url = this.webdav.buildFullUrl(backupPath);
+        const url = this.backup.buildFullUrl(backupPath);
         Utils.debug(`正在从以下URL恢复备份: ${url}`);
 
         const response = await new Promise((resolve, reject) => {
@@ -1707,9 +1958,12 @@
             method: "GET",
             url: url,
             headers: {
-              Authorization: `Basic ${btoa(
-                `${config.username}:${config.password}`
-              )}`,
+              ...(this.backup instanceof WebDAVBackupProvider
+                ? { Authorization: `Basic ${btoa(`${config.username}:${config.password}`)}` }
+                : {}),
+              ...(this.backup instanceof R2WorkerBackupProvider && config.authToken
+                ? { Authorization: `Bearer ${config.authToken}` }
+                : {}),
               Accept: "application/json",
             },
             onload: (response) => {
@@ -1807,10 +2061,17 @@
      * 注册菜单命令
      */
     registerMenuCommands() {
-      GM_registerMenuCommand("WebDAV 配置", () => {
-        this.ui.showWebDAVConfig(this.webdav, () => {
-          Utils.log("WebDAV配置已保存");
-          this.ui.showToast("WebDAV配置已保存");
+      GM_registerMenuCommand("备份设置", () => {
+        this.ui.showBackupConfig(this.backup, () => {
+          const providerType = GM_getValue(
+            `backup_provider_type_${this.site.id}_${this.userId}`,
+            "webdav"
+          );
+          this.backup = providerType === "r2worker"
+            ? new R2WorkerBackupProvider(this.userId, this.site)
+            : new WebDAVBackupProvider(this.userId, this.site);
+          Utils.log("备份配置已保存");
+          this.ui.showToast("备份配置已保存");
           this.performBackup();
         });
       });
@@ -1842,12 +2103,13 @@
     try {
       Utils.debug("脚本开始加载...");
 
-      if (window.location.hostname !== "www.nodeseek.com") {
-        Utils.debug("不在NodeSeek域名，脚本不会运行");
+      const activeSite = detectActiveSite();
+      if (!activeSite) {
+        Utils.debug("不在支持站点，脚本不会运行");
         return;
       }
 
-      chatBackup = new ChatBackup();
+      chatBackup = new ChatBackup(activeSite);
       window.chatBackup = chatBackup;
 
       if (document.readyState === "loading") {

@@ -914,6 +914,10 @@
       const filename = `${this.site.id}_chat_backup_${Utils.formatDate(new Date())}.json`;
       const key = this.buildKey(filename);
 
+      Utils.log(`[R2 上传] POST ${base}/upload`);
+      Utils.log(`[R2 上传] Key: ${key}`);
+      Utils.log(`[R2 上传] Data size: ${JSON.stringify(data).length} bytes`);
+
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
           method: "POST",
@@ -924,7 +928,11 @@
           },
           data: JSON.stringify({ key, data }),
           onload: (response) => {
+            Utils.log(`[R2 上传响应] Status: ${response.status}`);
+            Utils.log(`[R2 上传响应] Body: ${response.responseText}`);
+
             if (response.status >= 200 && response.status < 300) {
+              Utils.log(`[R2 上传] 成功: ${filename}`);
               resolve(filename);
             } else {
               // 尝试解析 JSON 错误响应
@@ -939,10 +947,14 @@
               } catch (e) {
                 errorMsg = `R2 上传失败: ${response.status} ${response.statusText}`;
               }
+              Utils.error(`[R2 上传] ${errorMsg}`);
               reject(new Error(errorMsg));
             }
           },
-          onerror: (error) => reject(new Error(`R2 上传网络错误: ${error?.message || "未知错误"}`)),
+          onerror: (error) => {
+            Utils.error(`[R2 上传] 网络错误:`, error);
+            reject(new Error(`R2 上传网络错误: ${error?.message || "未知错误"}`));
+          },
         });
       });
     }
@@ -952,15 +964,22 @@
       if (!cfg?.workerBaseUrl || !cfg?.authToken) return [];
       const base = cfg.workerBaseUrl.replace(/\/$/, "");
       const prefix = this.buildKey("").replace(/\/$/, "");
+      const url = `${base}/list?prefix=${encodeURIComponent(prefix)}`;
+
+      Utils.log(`[R2 请求] GET ${url}`);
+      Utils.log(`[R2 请求] Prefix: ${prefix}`);
 
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
           method: "GET",
-          url: `${base}/list?prefix=${encodeURIComponent(prefix)}`,
+          url: url,
           headers: {
             Authorization: `Bearer ${cfg.authToken}`,
           },
           onload: (response) => {
+            Utils.log(`[R2 响应] Status: ${response.status}`);
+            Utils.log(`[R2 响应] Body: ${response.responseText}`);
+
             if (response.status >= 200 && response.status < 300) {
               try {
                 const data = JSON.parse(response.responseText);
@@ -969,15 +988,33 @@
                   lastModified: it.lastModified || new Date().toISOString(),
                 }));
                 items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+                Utils.log(`[R2 响应] 成功解析 ${items.length} 个备份文件`);
                 resolve(items);
               } catch (e) {
+                Utils.error(`[R2 响应] 解析失败:`, e);
                 reject(new Error(`R2 列表解析失败: ${e.message}`));
               }
             } else {
-              reject(new Error(`R2 获取列表失败: ${response.status} ${response.statusText}`));
+              // 尝试解析错误信息
+              let errorMsg = `R2 获取列表失败: ${response.status}`;
+              try {
+                const errorData = JSON.parse(response.responseText);
+                if (errorData.message) {
+                  errorMsg = `R2 获取列表失败: ${errorData.message}`;
+                } else if (errorData.error) {
+                  errorMsg = `R2 获取列表失败: ${errorData.error}`;
+                }
+              } catch (e) {
+                errorMsg = `R2 获取列表失败: ${response.status} ${response.statusText}`;
+              }
+              Utils.error(`[R2 响应] ${errorMsg}`);
+              reject(new Error(errorMsg));
             }
           },
-          onerror: (error) => reject(new Error(`R2 获取列表网络错误: ${error?.message || "未知错误"}`)),
+          onerror: (error) => {
+            Utils.error(`[R2 请求] 网络错误:`, error);
+            reject(new Error(`R2 获取列表网络错误: ${error?.message || "未知错误"}`));
+          },
         });
       });
     }
@@ -1945,11 +1982,15 @@
           false
         );
 
+        // 立即初始化 UI（不等待数据库和备份）
+        this.ui.initTalkListObserver();
+        Utils.debug("UI 初始化完成，历史私信按钮已添加");
+
         // 初始化数据库和WebDAV
         this.db = new ChatDB(this.userId, this.site);
         await this.db.init();
 
-      // 初始化备份提供者（默认 webdav，可在“备份设置”中切换）
+      // 初始化备份提供者（默认 webdav，可在"备份设置"中切换）
       const providerTypeKey = `backup_provider_type_${this.site.id}_${this.userId}`;
       const providerType = GM_getValue(providerTypeKey, "webdav");
       this.backup = providerType === "r2worker"
@@ -1972,9 +2013,6 @@
 
         // 处理当前页面
         this.handlePageChange();
-
-        // 初始化talk-list监听器
-        this.ui.initTalkListObserver();
 
         Utils.log("NS-DF私信优化脚本初始化完成");
       } catch (error) {

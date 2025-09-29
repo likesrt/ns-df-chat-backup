@@ -178,22 +178,32 @@ async function handleUpload(request, env) {
  * 处理列出对象
  */
 async function handleList(request, env) {
-  assertAuth(request, env);
-  const url = new URL(request.url);
-  const prefix = normalizeKey(url.searchParams.get('prefix') || '');
+  try {
+    assertAuth(request, env);
+    const url = new URL(request.url);
+    const prefix = normalizeKey(url.searchParams.get('prefix') || '');
 
-  if (!env.R2_BUCKET) {
-    return json({ error: 'r2_not_configured', message: 'R2_BUCKET not bound' }, 500, request, env);
+    console.log(`List request - prefix: ${prefix}`);
+
+    if (!env.R2_BUCKET) {
+      console.error('R2_BUCKET not bound');
+      return json({ error: 'r2_not_configured', message: 'R2_BUCKET not bound. Please bind R2 bucket in Workers settings.' }, 500, request, env);
+    }
+
+    const list = await env.R2_BUCKET.list({ prefix });
+    const items = (list.objects || []).map((o) => ({
+      key: o.key,
+      lastModified: o.uploaded?.toISOString?.() || new Date().toISOString(),
+      size: o.size,
+    }));
+
+    console.log(`List result - found ${items.length} items`);
+    return json({ items }, 200, request, env);
+  } catch (error) {
+    console.error('List error:', error);
+    if (error instanceof Response) throw error;
+    return json({ error: 'list_failed', message: error?.message || String(error) }, 500, request, env);
   }
-
-  const list = await env.R2_BUCKET.list({ prefix });
-  const items = (list.objects || []).map((o) => ({
-    key: o.key,
-    lastModified: o.uploaded?.toISOString?.() || new Date().toISOString(),
-    size: o.size,
-  }));
-
-  return json({ items }, 200, request, env);
 }
 
 /**

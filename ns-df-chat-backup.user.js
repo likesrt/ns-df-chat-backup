@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NS-DF 私信优化脚本
 // @namespace    https://www.nodeseek.com/
-// @version      1.0.0
+// @version      2.0.0
 // @description  NS-DF 私信记录本地缓存与 WebDAV 备份
 // @author       yuyan
 // @match        https://www.nodeseek.com/notification*
@@ -15,6 +15,8 @@
 // @connect      dav.jianguoyun.com
 // @connect      workers.dev
 // @connect      *
+// @updateURL    https://github.com/likesrt/ns-df-chat-backup/raw/refs/heads/main/ns-df-chat-backup.user.js
+// @downloadURL  https://github.com/likesrt/ns-df-chat-backup/raw/refs/heads/main/ns-df-chat-backup.user.js
 // ==/UserScript==
 
 (function () {
@@ -143,7 +145,7 @@
    */
   const Utils = {
     // Debug开关，设置为 false 可以减少日志输出, true 显示详细日志
-    DEBUG: true,
+    DEBUG: false,
 
     /**
      * 格式化日期为文件名安全的字符串
@@ -2462,12 +2464,25 @@
                   if (newRemark === null) return;
 
                   try {
-                    await this.db.updateRemark(memberId, newRemark.trim());
-                    await this.performBackup();
-                    this.ui.showToast("备注已更新并同步备份");
+                    // 先更新界面显示
+                    btn.setAttribute("data-remark", newRemark.trim());
+                    const nameElement = btn.closest(".nodeseek-chat-name");
+                    const remarkText = newRemark.trim() ? ` (备注: ${newRemark.trim()})` : '';
+                    const memberNameText = nameElement.childNodes[0].textContent.split(' (')[0];
+                    nameElement.childNodes[0].textContent = `${memberNameText} (ID: ${memberId})${remarkText}`;
 
-                    // 再次刷新列表
-                    modal.querySelector("#show-latest-toggle").dispatchEvent(new Event('change'));
+                    this.ui.showToast("备注已更新,正在同步...");
+
+                    // 后台更新数据库和备份
+                    this.db.updateRemark(memberId, newRemark.trim())
+                      .then(() => this.performBackup())
+                      .then(() => {
+                        Utils.log("备注已同步到数据库和备份");
+                      })
+                      .catch((error) => {
+                        Utils.error("后台同步备注失败", error);
+                        this.ui.showToast("备注同步失败: " + error.message, "error");
+                      });
                   } catch (error) {
                     this.ui.showToast("更新备注失败: " + error.message, "error");
                     Utils.error("更新备注失败", error);
@@ -2496,16 +2511,30 @@
             if (newRemark === null) return;
 
             try {
-              // 更新数据库
-              await this.db.updateRemark(memberId, newRemark.trim());
+              // 先更新界面显示
+              btn.setAttribute("data-remark", newRemark.trim());
 
-              // 触发备份
-              await this.performBackup();
+              // 找到并更新名称显示
+              const chatItem = btn.closest(".nodeseek-chat-item");
+              const nameDiv = chatItem.querySelector(".nodeseek-chat-name");
+              const remarkText = newRemark.trim() ? ` (备注: ${newRemark.trim()})` : '';
+              const memberNameText = `${memberName} (ID: ${memberId})${remarkText}`;
 
-              // 刷新UI
-              this.ui.showToast("备注已更新并同步备份");
-              modal.remove();
-              this.showHistoryChats();
+              // 保留编辑按钮,只更新文本部分
+              nameDiv.innerHTML = `${memberNameText}<button class="nodeseek-remark-btn" data-member-id="${memberId}" data-member-name="${memberName}" data-remark="${newRemark.trim()}" title="编辑备注" style="margin-left: 8px; cursor: pointer; background: none; border: none; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: background 0.2s;">✏️</button>`;
+
+              this.ui.showToast("备注已更新,正在同步...");
+
+              // 后台更新数据库和备份
+              this.db.updateRemark(memberId, newRemark.trim())
+                .then(() => this.performBackup())
+                .then(() => {
+                  Utils.log("备注已同步到数据库和备份");
+                })
+                .catch((error) => {
+                  Utils.error("后台同步备注失败", error);
+                  this.ui.showToast("备注同步失败: " + error.message, "error");
+                });
             } catch (error) {
               this.ui.showToast("更新备注失败: " + error.message, "error");
               Utils.error("更新备注失败", error);
@@ -2840,11 +2869,11 @@
         Utils.debug("等待DOM加载完成...");
         document.addEventListener("DOMContentLoaded", () => {
           Utils.debug("DOM加载完成，1秒后开始初始化");
-          setTimeout(() => chatBackup.init(), 1000);
+          setTimeout(() => chatBackup.init(), 100);
         });
       } else {
         Utils.debug("DOM已加载，1秒后开始初始化");
-        setTimeout(() => chatBackup.init(), 1000);
+        setTimeout(() => chatBackup.init(), 100);
       }
     } catch (error) {
       Utils.error("脚本初始化失败", error);

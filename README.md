@@ -44,7 +44,7 @@
 1. 创建 R2 存储桶
 2. 创建 Worker
 3. 复制 [`workers/r2-backup-worker.js`](workers/r2-backup-worker.js) 到编辑器
-4. 绑定 R2 和配置环境变量
+4. 绑定 R2 和配置环境变量 具体查看 [`workers/README.md`](workers/README.md)
 
 ## 📋 备份策略配置
 

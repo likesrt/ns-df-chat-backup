@@ -13,6 +13,7 @@
 // @connect      www.nodeseek.com
 // @connect      www.deepflood.com
 // @connect      dav.jianguoyun.com
+// @connect      workers.dev
 // @connect      *
 // ==/UserScript==
 

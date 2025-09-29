@@ -58,7 +58,7 @@ btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
 **ALLOWED_ORIGINS**（推荐）：
 ```
 变量名：ALLOWED_ORIGINS
-值：https://www.nodeseek.com,https://www.deepflood.com
+值： https://www.nodeseek.com,https://www.deepflood.com
 ```
 
 2. 点击 **保存**
@@ -122,6 +122,13 @@ yarn wrangler deploy
 
 ### Q: GitHub 部署后如何更新代码？
 A: 修改 GitHub 仓库代码后，Cloudflare 会自动重新部署。
+
+### Q: 部署时遇到 "lockfile would have been modified" 错误？
+A: 这是 Yarn 版本不匹配问题。解决方法：
+1. 在项目根目录删除 `node_modules` 和 `yarn.lock`
+2. 重新运行 `yarn install`
+3. 提交新的 `yarn.lock` 到 GitHub
+4. Cloudflare 会自动重新部署
 
 ### Q: 如何使用自定义域名？
 A: Workers 设置 → 自定义域 → 添加域名

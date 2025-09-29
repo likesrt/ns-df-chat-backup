@@ -48,13 +48,13 @@
 btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
 ```
 
-**ALLOWED_ORIGINS**（推荐）：
+**ALLOWED_ORIGINS**（可选）：
 ```
 变量名：ALLOWED_ORIGINS
 类型：文本
 值：https://www.nodeseek.com,https://www.deepflood.com
-环境：生产
 ```
+*如果不设置此变量，默认允许所有域名访问（等同于 `*`）。建议设置具体域名以提高安全性。*
 
 2. 点击 **保存并部署**
 

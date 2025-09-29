@@ -810,9 +810,9 @@
         if (backups.length === 0) return;
 
         // 获取保留策略配置
-        const retentionType = GM_getValue(`retention_type_${this.site.id}_${this.userId}`, 'count');
-        const retentionCount = GM_getValue(`retention_count_${this.site.id}_${this.userId}`, 30);
-        const retentionDays = GM_getValue(`retention_days_${this.site.id}_${this.userId}`, 30);
+        const retentionType = GM_getValue('retention_type', 'count');
+        const retentionCount = GM_getValue('retention_count', 30);
+        const retentionDays = GM_getValue('retention_days', 30);
 
         let toDelete = [];
 
@@ -1045,9 +1045,9 @@
         if (backups.length === 0) return;
 
         // 获取保留策略配置
-        const retentionType = GM_getValue(`retention_type_${this.site.id}_${this.userId}`, 'count');
-        const retentionCount = GM_getValue(`retention_count_${this.site.id}_${this.userId}`, 30);
-        const retentionDays = GM_getValue(`retention_days_${this.site.id}_${this.userId}`, 30);
+        const retentionType = GM_getValue('retention_type', 'count');
+        const retentionCount = GM_getValue('retention_count', 30);
+        const retentionDays = GM_getValue('retention_days', 30);
 
         let toDelete = [];
 
@@ -1469,7 +1469,7 @@
             </div>
             <div class="nodeseek-form-group">
               <label>授权 Token（必填）</label>
-              <input type="text" id="r2-token" value="${r2cfg.authToken || ''}" placeholder="与 Worker 端 AUTH_TOKEN 一致">
+              <input type="password" id="r2-token" value="${r2cfg.authToken || ''}" placeholder="与 Worker 端 AUTH_TOKEN 一致">
             </div>
             <div class="nodeseek-form-group">
               <label>基础路径</label>
@@ -1483,26 +1483,26 @@
           <div style="font-weight: bold; font-size: 16px; margin-bottom: 12px;">📦 备份保留策略</div>
           <div style="margin-bottom: 12px;">
             <label style="display: flex; align-items: center; margin-bottom: 8px;">
-              <input type="radio" name="retention-type" value="count" ${GM_getValue(`retention_type_${site.id}_${userId}`, 'count') === 'count' ? 'checked' : ''} style="margin-right: 8px;">
+              <input type="radio" name="retention-type" value="count" ${GM_getValue('retention_type', 'count') === 'count' ? 'checked' : ''} style="margin-right: 8px;">
               按数量保留
             </label>
             <div style="margin-left: 24px;">
               <label style="display: flex; align-items: center; gap: 8px;">
                 保留最近
-                <input type="number" id="retention-count" value="${GM_getValue(`retention_count_${site.id}_${userId}`, 30)}" min="1" max="999" style="width: 80px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <input type="number" id="retention-count" value="${GM_getValue('retention_count', 30)}" min="1" max="999" style="width: 80px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
                 份备份
               </label>
             </div>
           </div>
           <div>
             <label style="display: flex; align-items: center; margin-bottom: 8px;">
-              <input type="radio" name="retention-type" value="days" ${GM_getValue(`retention_type_${site.id}_${userId}`, 'count') === 'days' ? 'checked' : ''} style="margin-right: 8px;">
+              <input type="radio" name="retention-type" value="days" ${GM_getValue('retention_type', 'count') === 'days' ? 'checked' : ''} style="margin-right: 8px;">
               按天数保留
             </label>
             <div style="margin-left: 24px;">
               <label style="display: flex; align-items: center; gap: 8px;">
                 保留最近
-                <input type="number" id="retention-days" value="${GM_getValue(`retention_days_${site.id}_${userId}`, 30)}" min="1" max="365" style="width: 80px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <input type="number" id="retention-days" value="${GM_getValue('retention_days', 30)}" min="1" max="365" style="width: 80px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
                 天的备份
               </label>
             </div>
@@ -1587,9 +1587,9 @@
           return;
         }
 
-        GM_setValue(`retention_type_${site.id}_${userId}`, retentionType);
-        GM_setValue(`retention_count_${site.id}_${userId}`, retentionCount);
-        GM_setValue(`retention_days_${site.id}_${userId}`, retentionDays);
+        GM_setValue('retention_type', retentionType);
+        GM_setValue('retention_count', retentionCount);
+        GM_setValue('retention_days', retentionDays);
 
         modal.remove();
         if (onSave) onSave();

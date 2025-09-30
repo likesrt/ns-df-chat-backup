@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         NS-DF 私信优化脚本
+// @name         NS-DF 私信备份优化脚本
 // @namespace    https://www.nodeseek.com/
 // @version      2.0.0
-// @description  NS-DF 私信记录本地缓存与 WebDAV 备份
+// @description  NS-DF 私信记录本地缓存与 WebDAV R2 备份
 // @author       yuyan
 // @match        https://www.nodeseek.com/notification*
 // @match        https://www.deepflood.com/notification*
